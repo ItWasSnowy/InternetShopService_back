@@ -8,6 +8,7 @@ using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Jwt;
 using InternetShopService_back.Infrastructure.Notifications;
 using InternetShopService_back.Middleware;
+using InternetShopService_back.Infrastructure.Sync;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Services;
 using InternetShopService_back.Modules.OrderManagement.Services;
@@ -18,7 +19,40 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    {
+        Title = "Internet Shop Service API",
+        Version = "v1",
+        Description = "API для управления кабинетами пользователей интернет-магазина"
+    });
+
+    // Добавляем поддержку JWT авторизации в Swagger
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. Enter 'Bearer' [space] and then your token in the text input below.\n\nExample: \"Bearer 12345abcdef\"",
+        Name = "Authorization",
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
 
 // Database
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -67,7 +101,7 @@ builder.Services.AddScoped<ICounterpartyRepository, CounterpartyRepository>();
 // Infrastructure services
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
-builder.Services.AddScoped<IFimBizGrpcClient, FimBizGrpcClient>();
+builder.Services.AddSingleton<IFimBizGrpcClient, FimBizGrpcClient>(); // Singleton для переиспользования канала
 
 // Call service (Zvonok API)
 var callProvider = builder.Configuration.GetValue<string>("CallsConfiguration:Provider")?.ToLower();
@@ -103,6 +137,13 @@ builder.Services.AddCors(options =>
               .AllowAnyHeader();
     });
 });
+
+// Background services
+var enableAutoSync = builder.Configuration.GetValue<bool>("FimBiz:EnableAutoSync", true);
+if (enableAutoSync)
+{
+    builder.Services.AddHostedService<FimBizSyncService>();
+}
 
 var app = builder.Build();
 

@@ -5,6 +5,10 @@ namespace InternetShopService_back.Shared.Models;
 public class Counterparty
 {
     public Guid Id { get; set; }
+    public int? FimBizContractorId { get; set; } // ID контрагента в FimBiz (int32)
+    public int? FimBizCompanyId { get; set; } // ID компании в FimBiz
+    public int? FimBizOrganizationId { get; set; } // ID организации в FimBiz
+    public int? LastSyncVersion { get; set; } // Последняя версия синхронизации
     public string Name { get; set; } = string.Empty;
     public string PhoneNumber { get; set; } = string.Empty;
     public CounterpartyType Type { get; set; }

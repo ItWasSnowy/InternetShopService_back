@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+option csharp_namespace = "InternetShopService_back.Infrastructure.Grpc.Contractors";
+
+package contractors;
+
+// Сервис синхронизации контрагентов
+service ContractorSyncService {
+  // Получить список контрагентов для синхронизации
+  rpc GetContractors (GetContractorsRequest) returns (GetContractorsResponse);
+  
+  // Получить конкретного контрагента
+  rpc GetContractor (GetContractorRequest) returns (Contractor);
+  
+  // Стриминг контрагентов (для больших объемов)
+  rpc StreamContractors (StreamContractorsRequest) returns (stream Contractor);
+  
+  // Подписка на изменения контрагентов
+  rpc SubscribeToChanges (SubscribeRequest) returns (stream ContractorChange);
+}
+
+// Запрос списка контрагентов
+message GetContractorsRequest {
+  optional int32 company_id = 1;
+  optional int32 organization_id = 2;
+  optional int32 min_sync_version = 3;
+  optional int64 updated_since = 4;
+  optional int32 page = 5;
+  optional int32 page_size = 6;
+  optional bool buyers_only = 7;
+  optional bool with_corporate_phone = 8;
+}
+
+// Ответ со списком контрагентов
+message GetContractorsResponse {
+  repeated Contractor contractors = 1;
+  int32 total_count = 2;
+  int32 max_sync_version = 3;
+  bool has_more = 4;
+}
+
+// Запрос конкретного контрагента
+message GetContractorRequest {
+  int32 contractor_id = 1;
+}
+
+// Запрос стриминга контрагентов
+message StreamContractorsRequest {
+  optional int32 company_id = 1;
+  optional int32 organization_id = 2;
+  optional int32 min_sync_version = 3;
+  optional bool buyers_only = 4;
+  optional bool with_corporate_phone = 5;
+}
+
+// Запрос подписки на изменения
+message SubscribeRequest {
+  optional int32 company_id = 1;
+  optional int32 organization_id = 2;
+  int32 last_sync_version = 3;
+}
+
+// Тип изменения контрагента
+enum ContractorChangeType {
+  CREATED = 0;
+  UPDATED = 1;
+  DELETED = 2;
+}
+
+// Сообщение об изменении контрагента
+message ContractorChange {
+  ContractorChangeType change_type = 1;
+  Contractor contractor = 2;
+}
+
+// Контрагент
+message Contractor {
+  // Идентификация
+  int32 contractor_id = 1;
+  int32 company_id = 2;
+  string company_name = 3;
+  int32 organization_id = 4;
+  string organization_name = 5;
+  
+  // Группировка
+  int32 group = 6;
+  bool is_grouped = 7;
+  
+  // Классификация
+  bool is_buyers = 8;
+  
+  // Основная информация
+  string name = 9;
+  string full_name = 10;
+  string type = 11;
+  
+  // Реквизиты
+  string inn = 12;
+  string kpp = 13;
+  string ogrn = 14;
+  string ogrnip = 15;
+  string country = 16;
+  string taxation = 17;
+  
+  // Контакты
+  string phone = 18;
+  string email = 19;
+  string address = 20;
+  string address_fact = 21;
+  
+  // Договор
+  string contract_number = 22;
+  string contract_date = 23;
+  
+  // Родительская компания
+  int32 parent_company_id = 24;
+  string parent_company_name = 25;
+  string parent_company_inn = 26;
+  
+  // Банковские реквизиты
+  repeated BankRequisites requisites = 27;
+  
+  // Скидки на группы номенклатуры
+  repeated DiscountRule discount_rules = 28;
+  
+  // Интернет-магазин
+  optional string corporate_phone_number = 29;
+  optional int64 corporate_phone_changed_at = 30;
+  
+  // Служебные поля
+  int32 sync_version = 31;
+  int64 created_at = 32;
+  int64 updated_at = 33;
+  string create_user_id = 34;
+}
+
+// Банковские реквизиты
+message BankRequisites {
+  int32 id = 1;
+  string bank_name = 2;
+  string bik = 3;
+  string correspondent_account = 4;
+  string account = 5;
+  bool is_active = 6;
+  int64 date_create = 7;
+}
+
+// Правило скидки
+message DiscountRule {
+  int32 id = 1;
+  string name = 2;
+  double discount_percent = 3;
+  int32 nomenclature_group_id = 4;
+  string nomenclature_group_name = 5;
+  bool apply_to_subgroups = 6;
+  optional int64 valid_from = 7;
+  optional int64 valid_to = 8;
+  bool is_active = 9;
+  optional string description = 10;
+  int64 date_create = 11;
+  int64 date_update = 12;
+  string create_user_id = 13;
+  optional string update_user_id = 14;
+  optional string comment = 15;
+}
+

@@ -14,11 +14,11 @@ public class SessionConfiguration : IEntityTypeConfiguration<Session>
 
         builder.Property(x => x.AccessToken)
             .IsRequired()
-            .HasMaxLength(500);
+            .HasMaxLength(2000); // JWT токены могут быть длинными
 
         builder.Property(x => x.RefreshToken)
             .IsRequired()
-            .HasMaxLength(500);
+            .HasMaxLength(2000); // JWT токены могут быть длинными
 
         builder.HasIndex(x => x.AccessToken);
         builder.HasIndex(x => x.RefreshToken);

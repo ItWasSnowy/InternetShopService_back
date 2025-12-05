@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Mvc;
 
 namespace InternetShopService_back.Modules.UserCabinet.Helpers;
 
@@ -34,6 +35,31 @@ public static class ControllerExtensions
         }
 
         return null;
+    }
+
+    public static string? GetPhoneNumber(this HttpContext context)
+    {
+        // Пытаемся получить из Items (установлено middleware)
+        if (context.Items.TryGetValue("PhoneNumber", out var phoneNumber) && phoneNumber is string phone)
+        {
+            return phone;
+        }
+
+        // Получаем из JWT claims
+        var phoneClaim = context.User.FindFirst(ClaimTypes.MobilePhone) 
+                      ?? context.User.FindFirst("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/mobilephone");
+        if (phoneClaim != null)
+        {
+            return phoneClaim.Value;
+        }
+
+        return null;
+    }
+
+    // Extension для ControllerBase
+    public static string? GetPhoneNumber(this ControllerBase controller)
+    {
+        return GetPhoneNumber(controller.HttpContext);
     }
 }
 

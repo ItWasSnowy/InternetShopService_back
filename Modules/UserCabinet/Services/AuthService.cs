@@ -5,6 +5,7 @@ using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Shared.Models;
+using InternetShopService_back.Shared.Repositories;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using BCrypt.Net;
@@ -15,6 +16,7 @@ public class AuthService : IAuthService
 {
     private readonly IUserAccountRepository _userAccountRepository;
     private readonly ISessionRepository _sessionRepository;
+    private readonly ICounterpartyRepository _counterpartyRepository;
     private readonly ICallService _callService;
     private readonly IJwtTokenService _jwtTokenService;
     private readonly IFimBizGrpcClient _fimBizGrpcClient;
@@ -28,6 +30,7 @@ public class AuthService : IAuthService
     public AuthService(
         IUserAccountRepository userAccountRepository,
         ISessionRepository sessionRepository,
+        ICounterpartyRepository counterpartyRepository,
         ICallService callService,
         IJwtTokenService jwtTokenService,
         IFimBizGrpcClient fimBizGrpcClient,
@@ -36,6 +39,7 @@ public class AuthService : IAuthService
     {
         _userAccountRepository = userAccountRepository;
         _sessionRepository = sessionRepository;
+        _counterpartyRepository = counterpartyRepository;
         _callService = callService;
         _jwtTokenService = jwtTokenService;
         _fimBizGrpcClient = fimBizGrpcClient;
@@ -63,17 +67,61 @@ public class AuthService : IAuthService
             if (userAccount == null)
             {
                 // Проверяем существование контрагента через FimBiz
-                var counterparty = await _fimBizGrpcClient.GetCounterpartyAsync(phoneNumber);
-                if (counterparty == null)
+                var fimBizCounterparty = await _fimBizGrpcClient.GetCounterpartyAsync(phoneNumber);
+                if (fimBizCounterparty == null)
                 {
-                    throw new InvalidOperationException("Контрагент с таким номером телефона не найден");
+                    throw new InvalidOperationException("Контрагент с таким номером телефона не найден в FimBiz");
                 }
 
-                // Создаем новый аккаунт
+                // Проверяем, существует ли контрагент в локальной БД
+                Counterparty? localCounterparty = null;
+                
+                if (fimBizCounterparty.FimBizContractorId.HasValue)
+                {
+                    // Ищем по FimBizContractorId
+                    localCounterparty = await _counterpartyRepository.GetByFimBizIdAsync(fimBizCounterparty.FimBizContractorId.Value);
+                }
+                
+                if (localCounterparty == null)
+                {
+                    // Ищем по номеру телефона
+                    localCounterparty = await _counterpartyRepository.GetByPhoneNumberAsync(phoneNumber);
+                }
+
+                // Если контрагента нет в БД, сохраняем его
+                if (localCounterparty == null)
+                {
+                    localCounterparty = fimBizCounterparty;
+                    localCounterparty = await _counterpartyRepository.CreateAsync(localCounterparty);
+                    _logger.LogInformation("Создан новый контрагент {CounterpartyId} для номера {PhoneNumber}", 
+                        localCounterparty.Id, phoneNumber);
+                }
+                else
+                {
+                    // Обновляем данные контрагента из FimBiz
+                    localCounterparty.Name = fimBizCounterparty.Name;
+                    localCounterparty.PhoneNumber = fimBizCounterparty.PhoneNumber;
+                    localCounterparty.Type = fimBizCounterparty.Type;
+                    localCounterparty.Email = fimBizCounterparty.Email;
+                    localCounterparty.Inn = fimBizCounterparty.Inn;
+                    localCounterparty.Kpp = fimBizCounterparty.Kpp;
+                    localCounterparty.LegalAddress = fimBizCounterparty.LegalAddress;
+                    localCounterparty.EdoIdentifier = fimBizCounterparty.EdoIdentifier;
+                    localCounterparty.HasPostPayment = fimBizCounterparty.HasPostPayment;
+                    localCounterparty.FimBizContractorId = fimBizCounterparty.FimBizContractorId;
+                    localCounterparty.FimBizCompanyId = fimBizCounterparty.FimBizCompanyId;
+                    localCounterparty.FimBizOrganizationId = fimBizCounterparty.FimBizOrganizationId;
+                    localCounterparty.LastSyncVersion = fimBizCounterparty.LastSyncVersion;
+                    localCounterparty.UpdatedAt = DateTime.UtcNow;
+                    
+                    localCounterparty = await _counterpartyRepository.UpdateAsync(localCounterparty);
+                }
+
+                // Создаем новый аккаунт с правильным CounterpartyId
                 userAccount = new UserAccount
                 {
                     Id = Guid.NewGuid(),
-                    CounterpartyId = counterparty.Id,
+                    CounterpartyId = localCounterparty.Id,
                     PhoneNumber = phoneNumber,
                     IsFirstLogin = true,
                     IsPasswordSet = false,
@@ -82,6 +130,8 @@ public class AuthService : IAuthService
                 };
 
                 await _userAccountRepository.CreateAsync(userAccount);
+                _logger.LogInformation("Создан новый аккаунт пользователя {UserId} для контрагента {CounterpartyId}", 
+                    userAccount.Id, localCounterparty.Id);
             }
 
             // Проверка лимита попыток входа
@@ -182,7 +232,8 @@ public class AuthService : IAuthService
             userAccount.LastLoginAt = DateTime.UtcNow;
 
             // Проверка, нужно ли запросить установку пароля
-            bool requiresPasswordSetup = userAccount.IsFirstLogin && !userAccount.IsPasswordSet;
+            // Запрашиваем установку пароля, если он не установлен (независимо от первого входа)
+            bool requiresPasswordSetup = !userAccount.IsPasswordSet;
             if (userAccount.IsFirstLogin)
             {
                 userAccount.IsFirstLogin = false;

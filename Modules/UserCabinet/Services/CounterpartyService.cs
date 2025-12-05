@@ -111,13 +111,16 @@ public class CounterpartyService : ICounterpartyService
             }
 
             // Синхронизируем скидки
-            var fimBizDiscounts = await _fimBizGrpcClient.GetCounterpartyDiscountsAsync(counterpartyId);
-            if (fimBizDiscounts != null && fimBizDiscounts.Any())
+            if (localCounterparty.FimBizContractorId.HasValue)
             {
-                // Здесь можно добавить логику синхронизации скидок
-                // Пока просто логируем
-                _logger.LogInformation("Получено {Count} скидок из FimBiz для контрагента {CounterpartyId}", 
-                    fimBizDiscounts.Count, counterpartyId);
+                var fimBizDiscounts = await _fimBizGrpcClient.GetCounterpartyDiscountsAsync(localCounterparty.FimBizContractorId.Value);
+                if (fimBizDiscounts != null && fimBizDiscounts.Any())
+                {
+                    // Здесь можно добавить логику синхронизации скидок в БД
+                    // Пока просто логируем
+                    _logger.LogInformation("Получено {Count} скидок из FimBiz для контрагента {CounterpartyId}", 
+                        fimBizDiscounts.Count, counterpartyId);
+                }
             }
 
             _logger.LogInformation("Синхронизация данных контрагента {CounterpartyId} завершена", counterpartyId);

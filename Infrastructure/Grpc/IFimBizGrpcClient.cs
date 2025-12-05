@@ -1,3 +1,5 @@
+using Grpc.Core;
+using InternetShopService_back.Infrastructure.Grpc.Contractors;
 using InternetShopService_back.Shared.Models;
 
 namespace InternetShopService_back.Infrastructure.Grpc;
@@ -6,7 +8,12 @@ public interface IFimBizGrpcClient
 {
     Task<Counterparty?> GetCounterpartyAsync(string phoneNumber);
     Task<Counterparty?> GetCounterpartyByIdAsync(Guid counterpartyId);
-    Task<List<Discount>> GetCounterpartyDiscountsAsync(Guid counterpartyId);
+    Task<Counterparty?> GetCounterpartyByFimBizIdAsync(int fimBizContractorId);
+    Task<List<Discount>> GetCounterpartyDiscountsAsync(int fimBizContractorId);
     Task SyncCounterpartyAsync(Guid counterpartyId);
+    
+    // Методы для синхронизации
+    Task<GetContractorsResponse> GetContractorsAsync(GetContractorsRequest request);
+    AsyncServerStreamingCall<ContractorChange> SubscribeToChanges(SubscribeRequest request);
 }
 

@@ -27,6 +27,13 @@ public class CounterpartyRepository : ICounterpartyRepository
             .FirstOrDefaultAsync(c => c.PhoneNumber == phoneNumber);
     }
 
+    public async Task<Counterparty?> GetByFimBizIdAsync(int fimBizContractorId)
+    {
+        return await _context.Counterparties
+            .Include(c => c.Discounts)
+            .FirstOrDefaultAsync(c => c.FimBizContractorId == fimBizContractorId);
+    }
+
     public async Task<List<Discount>> GetActiveDiscountsAsync(Guid counterpartyId)
     {
         var now = DateTime.UtcNow;

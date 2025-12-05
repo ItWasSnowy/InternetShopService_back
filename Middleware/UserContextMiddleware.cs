@@ -1,17 +1,14 @@
 using System.Security.Claims;
-using InternetShopService_back.Infrastructure.Jwt;
 
 namespace InternetShopService_back.Middleware;
 
 public class UserContextMiddleware
 {
     private readonly RequestDelegate _next;
-    private readonly IJwtTokenService _jwtTokenService;
 
-    public UserContextMiddleware(RequestDelegate next, IJwtTokenService jwtTokenService)
+    public UserContextMiddleware(RequestDelegate next)
     {
         _next = next;
-        _jwtTokenService = jwtTokenService;
     }
 
     public async Task InvokeAsync(HttpContext context)

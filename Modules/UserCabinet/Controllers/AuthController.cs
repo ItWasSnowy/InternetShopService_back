@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Services;
+using InternetShopService_back.Modules.UserCabinet.Helpers;
 
 namespace InternetShopService_back.Modules.UserCabinet.Controllers;
 
@@ -81,7 +82,15 @@ public class AuthController : ControllerBase
 
         try
         {
-            var result = await _authService.SetPasswordAsync(dto.PhoneNumber, dto.Password);
+            // Получаем номер телефона из JWT токена (безопаснее, чем из тела запроса)
+            var phoneNumberFromToken = this.GetPhoneNumber();
+            if (string.IsNullOrEmpty(phoneNumberFromToken))
+            {
+                return Unauthorized(new { error = "Не удалось определить номер телефона из токена" });
+            }
+
+            // Используем номер из токена, игнорируя номер из тела запроса (для безопасности)
+            var result = await _authService.SetPasswordAsync(phoneNumberFromToken, dto.Password);
             return Ok(result);
         }
         catch (ArgumentException ex)

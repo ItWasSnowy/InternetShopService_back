@@ -30,6 +30,8 @@ public class CounterpartyConfiguration : IEntityTypeConfiguration<Counterparty>
             .HasMaxLength(9);
 
         builder.HasIndex(x => x.PhoneNumber);
+        builder.HasIndex(x => x.FimBizContractorId);
+        builder.HasIndex(x => new { x.FimBizCompanyId, x.FimBizOrganizationId });
     }
 }
 

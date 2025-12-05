@@ -93,29 +93,125 @@ public class ZvonokCallService : ICallService
 
     private async Task<CallResponseDto> SendFlashCallAsync(CallRequestDto request)
     {
+        // Нормализация номера телефона для Zvonok API (формат: 7XXXXXXXXXX)
+        var normalizedPhone = NormalizePhoneNumber(request.PhoneNumber);
+        
+        _logger.LogDebug("Нормализованный номер телефона: {NormalizedPhone} (исходный: {OriginalPhone})", 
+            normalizedPhone, request.PhoneNumber);
+        
+        // Используем POST запрос с MultipartFormDataContent (как в FimBiz)
         var formData = new MultipartFormDataContent
         {
             { new StringContent(_publicKey), "public_key" },
-            { new StringContent(request.PhoneNumber), "phone" },
+            { new StringContent(normalizedPhone), "phone" },
             { new StringContent(_campaignId), "campaign_id" }
         };
 
+        // Формируем правильный URL согласно документации FimBiz
         var url = $"{_apiUrl}/phones/flashcall/";
+        _logger.LogInformation("Отправка POST запроса к Zvonok API: {Url}, номер: {PhoneNumber}, campaign_id: {CampaignId}", 
+            url, normalizedPhone, _campaignId);
+        
         var response = await _httpClient.PostAsync(url, formData);
         var content = await response.Content.ReadAsStringAsync();
 
-        _logger.LogDebug("Zvonok API ответ: {Response}", content);
+        var contentPreview = string.IsNullOrEmpty(content) 
+            ? "пусто" 
+            : content.Substring(0, Math.Min(500, content.Length));
+        
+        _logger.LogInformation("Zvonok API ответ от {Url}: StatusCode={StatusCode}, Content={Response}", 
+            url, response.StatusCode, contentPreview);
+
+        // Проверка на HTTP ошибки
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorMsg = $"HTTP {response.StatusCode}: {content}";
+            _logger.LogError("Zvonok API вернул HTTP ошибку: {Error}", errorMsg);
+            return new CallResponseDto
+            {
+                Success = false,
+                Message = errorMsg,
+                LastFourDigits = null,
+                RawResponse = content
+            };
+        }
 
         try
         {
-            var responseObj = JsonNode.Parse(content);
-
-            if (responseObj?["status"]?.GetValue<string>() == "error")
+            // Пытаемся распарсить JSON ответ
+            JsonNode? responseObj = null;
+            try
             {
-                var errorMessage = responseObj["data"]?.GetValue<string>() ?? "Неизвестная ошибка";
+                if (string.IsNullOrEmpty(content))
+                {
+                    return new CallResponseDto
+                    {
+                        Success = false,
+                        Message = "Пустой ответ от сервиса звонков",
+                        LastFourDigits = null,
+                        RawResponse = content ?? string.Empty
+                    };
+                }
+                
+                responseObj = JsonNode.Parse(content);
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogWarning(jsonEx, "Ответ не является валидным JSON: {Content}", content);
+                // Возможно, ответ в другом формате, попробуем обработать как текст
+                if (content.Contains("success") || content.Contains("error"))
+                {
+                    // Попытка найти код в текстовом ответе
+                    var match = System.Text.RegularExpressions.Regex.Match(content, @"(\d{4})");
+                    if (match.Success)
+                    {
+                        return new CallResponseDto
+                        {
+                            Success = true,
+                            Message = "Звонок успешно инициирован",
+                            LastFourDigits = match.Groups[1].Value,
+                            RawResponse = content
+                        };
+                    }
+                }
+                
+                return new CallResponseDto
+                {
+                    Success = false,
+                    Message = $"Не удалось обработать ответ от сервиса: {content}",
+                    LastFourDigits = null,
+                    RawResponse = content
+                };
+            }
+
+            if (responseObj == null)
+            {
+                _logger.LogWarning("Ответ от Zvonok API пустой или null");
+                return new CallResponseDto
+                {
+                    Success = false,
+                    Message = "Пустой ответ от сервиса звонков",
+                    LastFourDigits = null,
+                    RawResponse = content
+                };
+            }
+
+            // Проверка на ошибку в ответе
+            var status = responseObj["status"]?.GetValue<string>();
+            var success = responseObj["success"]?.GetValue<string>();
+            
+            if (status == "error" || success == "error")
+            {
+                var errorMessage = responseObj["data"]?.GetValue<string>() 
+                    ?? responseObj["message"]?.GetValue<string>() 
+                    ?? responseObj["error"]?.GetValue<string>() 
+                    ?? "Неизвестная ошибка";
+                
+                _logger.LogWarning("Zvonok API вернул ошибку: {Error}", errorMessage);
                 
                 // Проверка на превышение лимита звонков
-                if (errorMessage.Contains("excess limit") || errorMessage.Contains("limit"))
+                if (errorMessage.Contains("excess limit") || errorMessage.Contains("limit") || 
+                    errorMessage.Contains("лимит") || errorMessage.Contains("превышен"))
                 {
                     // Извлечение времени ожидания (если есть)
                     int waitTime = ExtractWaitTimeFromError(errorMessage);
@@ -142,30 +238,67 @@ public class ZvonokCallService : ICallService
 
             // Извлечение пин-кода из ответа
             string? lastFourDigits = null;
-            if (response.IsSuccessStatusCode && responseObj != null)
+            
+            // Пробуем разные варианты структуры ответа
+            var data = responseObj["data"];
+            if (data != null)
             {
-                var data = responseObj["data"];
-                if (data != null && data["pincode"] != null)
+                // Вариант 1: data.pincode
+                if (data["pincode"] != null)
                 {
                     lastFourDigits = data["pincode"]?.GetValue<string>();
                 }
+                // Вариант 2: data.code
+                else if (data["code"] != null)
+                {
+                    lastFourDigits = data["code"]?.GetValue<string>();
+                }
+                // Вариант 3: data напрямую строка с кодом
+                else if (data.GetValueKind() == System.Text.Json.JsonValueKind.String)
+                {
+                    var codeStr = data.GetValue<string>();
+                    if (codeStr != null && codeStr.Length == 4 && System.Text.RegularExpressions.Regex.IsMatch(codeStr, @"^\d{4}$"))
+                    {
+                        lastFourDigits = codeStr;
+                    }
+                }
             }
+            
+            // Если не нашли в data, ищем в корне ответа
+            if (string.IsNullOrEmpty(lastFourDigits))
+            {
+                if (responseObj["pincode"] != null)
+                {
+                    lastFourDigits = responseObj["pincode"]?.GetValue<string>();
+                }
+                else if (responseObj["code"] != null)
+                {
+                    lastFourDigits = responseObj["code"]?.GetValue<string>();
+                }
+            }
+
+            _logger.LogInformation("Обработка ответа завершена. Success={Success}, Code={Code}", 
+                response.IsSuccessStatusCode, lastFourDigits ?? "не найден");
 
             return new CallResponseDto
             {
                 Success = response.IsSuccessStatusCode,
-                Message = response.IsSuccessStatusCode ? "Звонок успешно инициирован" : "Ошибка при отправке звонка",
+                Message = response.IsSuccessStatusCode 
+                    ? (string.IsNullOrEmpty(lastFourDigits) 
+                        ? "Звонок инициирован, но код не получен" 
+                        : "Звонок успешно инициирован")
+                    : "Ошибка при отправке звонка",
                 LastFourDigits = lastFourDigits,
                 RawResponse = content
             };
         }
-        catch (JsonException ex)
+        catch (Exception ex)
         {
-            _logger.LogError(ex, "Ошибка парсинга ответа Zvonok API: {Content}", content);
+            _logger.LogError(ex, "Неожиданная ошибка при обработке ответа Zvonok API: {Content}", content);
             return new CallResponseDto
             {
                 Success = false,
-                Message = "Ошибка обработки ответа от сервиса звонков",
+                Message = $"Ошибка обработки ответа от сервиса звонков: {ex.Message}",
                 LastFourDigits = null,
                 RawResponse = content
             };
@@ -183,6 +316,32 @@ public class ZvonokCallService : ICallService
             return (int)Math.Ceiling(seconds / 60.0); // Конвертируем секунды в минуты
         }
         return 5; // По умолчанию 5 минут
+    }
+
+    private string NormalizePhoneNumber(string phoneNumber)
+    {
+        if (string.IsNullOrEmpty(phoneNumber))
+            return string.Empty;
+
+        // Убираем все нецифровые символы, кроме + в начале
+        var normalized = phoneNumber.Replace(" ", "")
+            .Replace("-", "")
+            .Replace("(", "")
+            .Replace(")", "");
+
+        // Если начинается с +7, убираем +
+        if (normalized.StartsWith("+7"))
+            normalized = normalized.Substring(1);
+
+        // Если начинается с 8, заменяем на 7
+        if (normalized.StartsWith("8"))
+            normalized = "7" + normalized.Substring(1);
+
+        // Убеждаемся, что начинается с 7
+        if (!normalized.StartsWith("7"))
+            normalized = "7" + normalized;
+
+        return normalized;
     }
 }
 
