@@ -27,6 +27,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<Order> Orders { get; set; }
     public DbSet<OrderItem> OrderItems { get; set; }
     public DbSet<Invoice> Invoices { get; set; }
+    public DbSet<InvoiceItem> InvoiceItems { get; set; }
     public DbSet<UpdDocument> UpdDocuments { get; set; }
     public DbSet<OrderStatusHistory> OrderStatusHistories { get; set; }
     public DbSet<OrderAttachment> OrderAttachments { get; set; }
