@@ -21,6 +21,7 @@ public class AuthService : IAuthService
     private readonly ICallService _callService;
     private readonly IJwtTokenService _jwtTokenService;
     private readonly IFimBizGrpcClient _fimBizGrpcClient;
+    private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthService> _logger;
 
@@ -36,6 +37,7 @@ public class AuthService : IAuthService
         ICallService callService,
         IJwtTokenService jwtTokenService,
         IFimBizGrpcClient fimBizGrpcClient,
+        IHttpContextAccessor httpContextAccessor,
         IConfiguration configuration,
         ILogger<AuthService> logger)
     {
@@ -46,6 +48,7 @@ public class AuthService : IAuthService
         _callService = callService;
         _jwtTokenService = jwtTokenService;
         _fimBizGrpcClient = fimBizGrpcClient;
+        _httpContextAccessor = httpContextAccessor;
         _configuration = configuration;
         _logger = logger;
 
@@ -277,7 +280,8 @@ public class AuthService : IAuthService
                 userAccount.CounterpartyId,
                 userAccount.ShopId);
 
-            // Создание сессии
+            // Создание сессии с информацией об устройстве
+            var deviceInfo = GetDeviceInfo();
             var session = new Session
             {
                 Id = Guid.NewGuid(),
@@ -285,7 +289,10 @@ public class AuthService : IAuthService
                 AccessToken = accessToken,
                 RefreshToken = refreshToken,
                 ExpiresAt = DateTime.UtcNow.AddHours(24), // Refresh token живет 24 часа
-                IsActive = true
+                IsActive = true,
+                DeviceInfo = deviceInfo.deviceInfo,
+                UserAgent = deviceInfo.userAgent,
+                IpAddress = deviceInfo.ipAddress
             };
 
             await _sessionRepository.CreateAsync(session);
@@ -344,6 +351,7 @@ public class AuthService : IAuthService
                 userAccount.CounterpartyId,
                 userAccount.ShopId);
 
+            var deviceInfo = GetDeviceInfo();
             var session = new Session
             {
                 Id = Guid.NewGuid(),
@@ -351,7 +359,10 @@ public class AuthService : IAuthService
                 AccessToken = accessToken,
                 RefreshToken = refreshToken,
                 ExpiresAt = DateTime.UtcNow.AddHours(24),
-                IsActive = true
+                IsActive = true,
+                DeviceInfo = deviceInfo.deviceInfo,
+                UserAgent = deviceInfo.userAgent,
+                IpAddress = deviceInfo.ipAddress
             };
 
             await _sessionRepository.CreateAsync(session);
@@ -431,6 +442,7 @@ public class AuthService : IAuthService
                 userAccount.CounterpartyId,
                 userAccount.ShopId);
 
+            var deviceInfo = GetDeviceInfo();
             var session = new Session
             {
                 Id = Guid.NewGuid(),
@@ -438,7 +450,10 @@ public class AuthService : IAuthService
                 AccessToken = accessToken,
                 RefreshToken = refreshToken,
                 ExpiresAt = DateTime.UtcNow.AddHours(24),
-                IsActive = true
+                IsActive = true,
+                DeviceInfo = deviceInfo.deviceInfo,
+                UserAgent = deviceInfo.userAgent,
+                IpAddress = deviceInfo.ipAddress
             };
 
             await _sessionRepository.CreateAsync(session);
@@ -516,5 +531,74 @@ public class AuthService : IAuthService
     {
         return !string.IsNullOrEmpty(phoneNumber) &&
                System.Text.RegularExpressions.Regex.IsMatch(phoneNumber, @"^7\d{10}$");
+    }
+
+    private (string? deviceInfo, string? userAgent, string? ipAddress) GetDeviceInfo()
+    {
+        var httpContext = _httpContextAccessor.HttpContext;
+        if (httpContext == null)
+            return (null, null, null);
+
+        var userAgent = httpContext.Request.Headers["User-Agent"].ToString();
+        var ipAddress = GetClientIpAddress(httpContext);
+        var deviceInfo = ParseDeviceInfo(userAgent);
+
+        return (deviceInfo, userAgent, ipAddress);
+    }
+
+    private string? ParseDeviceInfo(string? userAgent)
+    {
+        if (string.IsNullOrEmpty(userAgent))
+            return null;
+
+        // Парсим User-Agent для определения браузера и ОС
+        var browser = "Unknown";
+        var os = "Unknown";
+
+        // Определяем браузер
+        if (userAgent.Contains("Chrome", StringComparison.OrdinalIgnoreCase) && !userAgent.Contains("Edg", StringComparison.OrdinalIgnoreCase))
+            browser = "Chrome";
+        else if (userAgent.Contains("Firefox", StringComparison.OrdinalIgnoreCase))
+            browser = "Firefox";
+        else if (userAgent.Contains("Safari", StringComparison.OrdinalIgnoreCase) && !userAgent.Contains("Chrome", StringComparison.OrdinalIgnoreCase))
+            browser = "Safari";
+        else if (userAgent.Contains("Edg", StringComparison.OrdinalIgnoreCase))
+            browser = "Edge";
+        else if (userAgent.Contains("Opera", StringComparison.OrdinalIgnoreCase) || userAgent.Contains("OPR", StringComparison.OrdinalIgnoreCase))
+            browser = "Opera";
+
+        // Определяем ОС
+        if (userAgent.Contains("Windows", StringComparison.OrdinalIgnoreCase))
+            os = "Windows";
+        else if (userAgent.Contains("Mac OS", StringComparison.OrdinalIgnoreCase) || userAgent.Contains("MacOS", StringComparison.OrdinalIgnoreCase))
+            os = "macOS";
+        else if (userAgent.Contains("Linux", StringComparison.OrdinalIgnoreCase))
+            os = "Linux";
+        else if (userAgent.Contains("Android", StringComparison.OrdinalIgnoreCase))
+            os = "Android";
+        else if (userAgent.Contains("iOS", StringComparison.OrdinalIgnoreCase) || userAgent.Contains("iPhone", StringComparison.OrdinalIgnoreCase) || userAgent.Contains("iPad", StringComparison.OrdinalIgnoreCase))
+            os = "iOS";
+
+        return $"{browser} on {os}";
+    }
+
+    private string? GetClientIpAddress(HttpContext httpContext)
+    {
+        // Проверяем заголовки прокси
+        var ipAddress = httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(ipAddress))
+        {
+            // X-Forwarded-For может содержать несколько IP через запятую
+            var ips = ipAddress.Split(',');
+            if (ips.Length > 0)
+                return ips[0].Trim();
+        }
+
+        ipAddress = httpContext.Request.Headers["X-Real-IP"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(ipAddress))
+            return ipAddress;
+
+        // Используем RemoteIpAddress как fallback
+        return httpContext.Connection.RemoteIpAddress?.ToString();
     }
 }

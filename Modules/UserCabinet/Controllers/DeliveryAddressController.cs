@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Helpers;
 using InternetShopService_back.Modules.UserCabinet.Services;
@@ -10,17 +9,17 @@ namespace InternetShopService_back.Modules.UserCabinet.Controllers;
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
-public class CartController : ControllerBase
+public class DeliveryAddressController : ControllerBase
 {
-    private readonly ICartService _cartService;
+    private readonly IDeliveryAddressService _addressService;
 
-    public CartController(ICartService cartService)
+    public DeliveryAddressController(IDeliveryAddressService addressService)
     {
-        _cartService = cartService;
+        _addressService = addressService;
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetCart()
+    public async Task<IActionResult> GetAddresses()
     {
         var userId = HttpContext.GetUserId();
         if (userId == null)
@@ -30,12 +29,8 @@ public class CartController : ControllerBase
 
         try
         {
-            var cart = await _cartService.GetCartAsync(userId.Value);
-            return Ok(cart);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { error = ex.Message });
+            var addresses = await _addressService.GetAddressesAsync(userId.Value);
+            return Ok(addresses);
         }
         catch (Exception)
         {
@@ -43,8 +38,54 @@ public class CartController : ControllerBase
         }
     }
 
-    [HttpPost("add")]
-    public async Task<IActionResult> AddItem([FromBody] AddCartItemDto item)
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetAddress(Guid id)
+    {
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var address = await _addressService.GetAddressAsync(userId.Value, id);
+            if (address == null)
+                return NotFound(new { error = "Адрес не найден" });
+
+            return Ok(address);
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
+    }
+
+    [HttpGet("default")]
+    public async Task<IActionResult> GetDefaultAddress()
+    {
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var address = await _addressService.GetDefaultAddressAsync(userId.Value);
+            if (address == null)
+                return NotFound(new { error = "Адрес по умолчанию не найден" });
+
+            return Ok(address);
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> CreateAddress([FromBody] CreateDeliveryAddressDto dto)
     {
         if (!ModelState.IsValid)
         {
@@ -59,8 +100,8 @@ public class CartController : ControllerBase
 
         try
         {
-            var cart = await _cartService.AddItemAsync(userId.Value, item);
-            return Ok(cart);
+            var address = await _addressService.CreateAddressAsync(userId.Value, dto);
+            return CreatedAtAction(nameof(GetAddress), new { id = address.Id }, address);
         }
         catch (InvalidOperationException ex)
         {
@@ -72,8 +113,8 @@ public class CartController : ControllerBase
         }
     }
 
-    [HttpPut("{itemId}")]
-    public async Task<IActionResult> UpdateItem(Guid itemId, [FromBody] UpdateCartItemDto dto)
+    [HttpPut("{id}")]
+    public async Task<IActionResult> UpdateAddress(Guid id, [FromBody] UpdateDeliveryAddressDto dto)
     {
         if (!ModelState.IsValid)
         {
@@ -88,20 +129,12 @@ public class CartController : ControllerBase
 
         try
         {
-            var cart = await _cartService.UpdateItemAsync(userId.Value, itemId, dto.Quantity);
-            return Ok(cart);
-        }
-        catch (ArgumentException ex)
-        {
-            return BadRequest(new { error = ex.Message });
+            var address = await _addressService.UpdateAddressAsync(userId.Value, id, dto);
+            return Ok(address);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Unauthorized(new { error = ex.Message });
         }
         catch (Exception)
         {
@@ -109,8 +142,8 @@ public class CartController : ControllerBase
         }
     }
 
-    [HttpDelete("{itemId}")]
-    public async Task<IActionResult> RemoveItem(Guid itemId)
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeleteAddress(Guid id)
     {
         var userId = HttpContext.GetUserId();
         if (userId == null)
@@ -120,25 +153,20 @@ public class CartController : ControllerBase
 
         try
         {
-            var result = await _cartService.RemoveItemAsync(userId.Value, itemId);
+            var result = await _addressService.DeleteAddressAsync(userId.Value, id);
             if (!result)
-            {
-                return NotFound(new { error = "Товар не найден в корзине" });
-            }
+                return NotFound(new { error = "Адрес не найден" });
+
             return NoContent();
         }
-        catch (UnauthorizedAccessException ex)
-        {
-            return Unauthorized(new { error = ex.Message });
-        }
         catch (Exception)
         {
             return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
         }
     }
 
-    [HttpDelete("clear")]
-    public async Task<IActionResult> ClearCart()
+    [HttpPut("{id}/set-default")]
+    public async Task<IActionResult> SetDefaultAddress(Guid id)
     {
         var userId = HttpContext.GetUserId();
         if (userId == null)
@@ -148,37 +176,8 @@ public class CartController : ControllerBase
 
         try
         {
-            var result = await _cartService.ClearCartAsync(userId.Value);
-            if (!result)
-            {
-                return NotFound(new { error = "Корзина не найдена" });
-            }
-            return NoContent();
-        }
-        catch (Exception)
-        {
-            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
-        }
-    }
-
-    [HttpPost("create-order")]
-    public async Task<IActionResult> CreateOrderFromCart([FromBody] CreateOrderFromCartDto dto)
-    {
-        if (!ModelState.IsValid)
-        {
-            return BadRequest(ModelState);
-        }
-
-        var userId = HttpContext.GetUserId();
-        if (userId == null)
-        {
-            return Unauthorized(new { error = "Пользователь не авторизован" });
-        }
-
-        try
-        {
-            var order = await _cartService.CreateOrderFromCartAsync(userId.Value, dto);
-            return CreatedAtAction(nameof(GetCart), new { }, order);
+            var address = await _addressService.SetDefaultAddressAsync(userId.Value, id);
+            return Ok(address);
         }
         catch (InvalidOperationException ex)
         {

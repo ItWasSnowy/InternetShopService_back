@@ -1,3 +1,5 @@
+using InternetShopService_back.Modules.OrderManagement.DTOs;
+using InternetShopService_back.Modules.OrderManagement.Services;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
@@ -12,17 +14,20 @@ public class CartService : ICartService
     private readonly ICartRepository _cartRepository;
     private readonly IUserAccountRepository _userAccountRepository;
     private readonly ICounterpartyRepository _counterpartyRepository;
+    private readonly IOrderService _orderService;
     private readonly ILogger<CartService> _logger;
 
     public CartService(
         ICartRepository cartRepository,
         IUserAccountRepository userAccountRepository,
         ICounterpartyRepository counterpartyRepository,
+        IOrderService orderService,
         ILogger<CartService> logger)
     {
         _cartRepository = cartRepository;
         _userAccountRepository = userAccountRepository;
         _counterpartyRepository = counterpartyRepository;
+        _orderService = orderService;
         _logger = logger;
     }
 
@@ -254,5 +259,51 @@ public class CartService : ICartService
         
         // TODO: Получить группу номенклатуры и найти скидку на группу
         return null;
+    }
+
+    public async Task<OrderDto> CreateOrderFromCartAsync(Guid userId, CreateOrderFromCartDto dto)
+    {
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+        {
+            throw new InvalidOperationException("Пользователь не найден");
+        }
+
+        // Получаем корзину пользователя
+        var cart = await _cartRepository.GetByUserIdAsync(userId);
+        if (cart == null || !cart.Items.Any())
+        {
+            throw new InvalidOperationException("Корзина пуста");
+        }
+
+        // Получаем скидки контрагента
+        var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
+
+        // Преобразуем товары из корзины в формат для заказа
+        var orderItems = cart.Items.Select(item =>
+        {
+            var discount = FindDiscountForItem(item.NomenclatureId, discounts);
+            var discountPercent = discount?.DiscountPercent ?? 0;
+
+            return new CreateOrderItemDto
+            {
+                NomenclatureId = item.NomenclatureId,
+                NomenclatureName = item.NomenclatureName,
+                Quantity = item.Quantity,
+                Price = item.Price
+            };
+        }).ToList();
+
+        // Создаем заказ через OrderService
+        var order = await _orderService.CreateOrderFromCartAsync(userId, dto, orderItems);
+
+        // Очищаем корзину после успешного создания заказа
+        await _cartRepository.ClearCartItemsAsync(cart.Id);
+        cart.UpdatedAt = DateTime.UtcNow;
+        await _cartRepository.UpdateAsync(cart);
+
+        _logger.LogInformation("Создан заказ {OrderId} из корзины пользователя {UserId}", order.Id, userId);
+
+        return order;
     }
 }

@@ -11,6 +11,7 @@ using InternetShopService_back.Middleware;
 using InternetShopService_back.Infrastructure.Sync;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Services;
+using InternetShopService_back.Modules.OrderManagement.Repositories;
 using InternetShopService_back.Modules.OrderManagement.Services;
 using InternetShopService_back.Shared.Repositories;
 
@@ -98,8 +99,12 @@ builder.Services.AddScoped<ISessionRepository, SessionRepository>();
 builder.Services.AddScoped<ICartRepository, CartRepository>();
 builder.Services.AddScoped<ICounterpartyRepository, CounterpartyRepository>();
 builder.Services.AddScoped<IShopRepository, ShopRepository>();
+builder.Services.AddScoped<IDeliveryAddressRepository, DeliveryAddressRepository>();
+builder.Services.AddScoped<ICargoReceiverRepository, CargoReceiverRepository>();
+builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 
 // Infrastructure services
+builder.Services.AddHttpContextAccessor(); // Для доступа к HttpContext в сервисах
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddSingleton<IFimBizGrpcClient, FimBizGrpcClient>(); // Singleton для переиспользования канала
@@ -118,8 +123,11 @@ switch (callProvider)
 
 // Business services
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<ICounterpartyService, CounterpartyService>();
+builder.Services.AddScoped<IDeliveryAddressService, DeliveryAddressService>();
+builder.Services.AddScoped<ICargoReceiverService, CargoReceiverService>();
 builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddScoped<IOrderStatusService, OrderStatusService>();
 builder.Services.AddScoped<IInvoiceService, InvoiceService>();

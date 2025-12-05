@@ -27,6 +27,34 @@ public class SessionRepository : ISessionRepository
             .FirstOrDefaultAsync(s => s.RefreshToken == refreshToken && s.IsActive);
     }
 
+    public async Task<Session?> GetByIdAsync(Guid sessionId)
+    {
+        return await _context.Sessions
+            .Include(s => s.UserAccount)
+            .FirstOrDefaultAsync(s => s.Id == sessionId);
+    }
+
+    public async Task<List<Session>> GetActiveSessionsByCounterpartyIdAsync(Guid counterpartyId)
+    {
+        return await _context.Sessions
+            .Include(s => s.UserAccount)
+            .Where(s => s.UserAccount.CounterpartyId == counterpartyId 
+                && s.IsActive 
+                && s.ExpiresAt > DateTime.UtcNow)
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+    }
+
+    public async Task<List<Session>> GetActiveSessionsByUserIdAsync(Guid userId)
+    {
+        return await _context.Sessions
+            .Where(s => s.UserAccountId == userId 
+                && s.IsActive 
+                && s.ExpiresAt > DateTime.UtcNow)
+            .OrderByDescending(s => s.CreatedAt)
+            .ToListAsync();
+    }
+
     public async Task<Session> CreateAsync(Session session)
     {
         session.CreatedAt = DateTime.UtcNow;
@@ -53,6 +81,26 @@ public class SessionRepository : ISessionRepository
             _context.Sessions.Remove(session);
             await _context.SaveChangesAsync();
         }
+    }
+
+    public async Task<bool> DeactivateSessionsByIdsAsync(List<Guid> sessionIds)
+    {
+        var sessions = await _context.Sessions
+            .Where(s => sessionIds.Contains(s.Id))
+            .ToListAsync();
+
+        foreach (var session in sessions)
+        {
+            session.IsActive = false;
+        }
+
+        if (sessions.Any())
+        {
+            await _context.SaveChangesAsync();
+            return true;
+        }
+
+        return false;
     }
 }
 

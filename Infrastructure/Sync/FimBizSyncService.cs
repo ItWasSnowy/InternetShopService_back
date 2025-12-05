@@ -222,6 +222,12 @@ public class FimBizSyncService : BackgroundService
     {
         try
         {
+            // Обработка управления сессиями (если есть)
+            if (change.SessionControl != null)
+            {
+                await ProcessSessionControlAsync(change.SessionControl, dbContext, cancellationToken);
+            }
+
             var contractor = change.Contractor;
             
             // Если флаг is_create_cabinet = false, не синхронизируем контрагента (если его еще нет в БД)
@@ -251,6 +257,88 @@ public class FimBizSyncService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Ошибка при обработке изменения контрагента {ContractorId}", change.Contractor?.ContractorId);
+        }
+    }
+
+    private async Task ProcessSessionControlAsync(
+        SessionControl sessionControl,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Находим контрагента по FimBizContractorId
+            var counterparty = await dbContext.Counterparties
+                .FirstOrDefaultAsync(c => c.FimBizContractorId == sessionControl.ContractorId, cancellationToken);
+
+            if (counterparty == null)
+            {
+                _logger.LogWarning("Контрагент {ContractorId} не найден для управления сессиями", sessionControl.ContractorId);
+                return;
+            }
+
+            // Находим UserAccount для этого контрагента
+            var userAccount = await dbContext.UserAccounts
+                .FirstOrDefaultAsync(u => u.CounterpartyId == counterparty.Id, cancellationToken);
+
+            if (userAccount == null)
+            {
+                _logger.LogWarning("UserAccount не найден для контрагента {ContractorId}", sessionControl.ContractorId);
+                return;
+            }
+
+            switch (sessionControl.Action)
+            {
+                case SessionAction.DeactivateAll:
+                    // Деактивируем все активные сессии
+                    var allSessions = await dbContext.Sessions
+                        .Where(s => s.UserAccountId == userAccount.Id && s.IsActive && s.ExpiresAt > DateTime.UtcNow)
+                        .ToListAsync(cancellationToken);
+
+                    foreach (var session in allSessions)
+                    {
+                        session.IsActive = false;
+                    }
+
+                    if (allSessions.Any())
+                    {
+                        await dbContext.SaveChangesAsync(cancellationToken);
+                        _logger.LogInformation("Деактивировано {Count} активных сессий для контрагента {ContractorId} по запросу из FimBiz", 
+                            allSessions.Count, sessionControl.ContractorId);
+                    }
+                    break;
+
+                case SessionAction.DeactivateById:
+                    // Деактивируем конкретные сессии по ID
+                    if (sessionControl.SessionIds != null && sessionControl.SessionIds.Count > 0)
+                    {
+                        var sessionIds = sessionControl.SessionIds
+                            .Where(id => Guid.TryParse(id, out _))
+                            .Select(Guid.Parse)
+                            .ToList();
+
+                        var sessions = await dbContext.Sessions
+                            .Where(s => s.UserAccountId == userAccount.Id && sessionIds.Contains(s.Id))
+                            .ToListAsync(cancellationToken);
+
+                        foreach (var session in sessions)
+                        {
+                            session.IsActive = false;
+                        }
+
+                        if (sessions.Any())
+                        {
+                            await dbContext.SaveChangesAsync(cancellationToken);
+                            _logger.LogInformation("Деактивировано {Count} сессий для контрагента {ContractorId} по запросу из FimBiz. Причина: {Reason}", 
+                                sessions.Count, sessionControl.ContractorId, sessionControl.Reason ?? "не указана");
+                        }
+                    }
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при обработке управления сессиями для контрагента {ContractorId}", sessionControl.ContractorId);
         }
     }
 

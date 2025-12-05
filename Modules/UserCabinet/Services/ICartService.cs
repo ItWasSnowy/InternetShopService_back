@@ -1,3 +1,4 @@
+using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 
 namespace InternetShopService_back.Modules.UserCabinet.Services;
@@ -9,5 +10,6 @@ public interface ICartService
     Task<CartDto> UpdateItemAsync(Guid userId, Guid itemId, int quantity);
     Task<bool> RemoveItemAsync(Guid userId, Guid itemId);
     Task<bool> ClearCartAsync(Guid userId);
+    Task<OrderDto> CreateOrderFromCartAsync(Guid userId, CreateOrderFromCartDto dto);
 }
 

@@ -1,12 +1,15 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Services;
+using InternetShopService_back.Modules.UserCabinet.Helpers;
 
 namespace InternetShopService_back.Modules.OrderManagement.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class OrdersController : ControllerBase
 {
     private readonly IOrderService _orderService;
@@ -19,19 +22,46 @@ public class OrdersController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetOrders()
     {
-        // TODO: Get userId from JWT token
-        var userId = Guid.NewGuid(); // Placeholder
-        var orders = await _orderService.GetOrdersByUserAsync(userId);
-        return Ok(orders);
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var orders = await _orderService.GetOrdersByUserAsync(userId.Value);
+            return Ok(orders);
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
     }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetOrder(Guid id)
     {
-        var order = await _orderService.GetOrderAsync(id);
-        if (order == null)
-            return NotFound();
-        return Ok(order);
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var order = await _orderService.GetOrderAsync(id);
+            if (order == null)
+                return NotFound(new { error = "Заказ не найден" });
+
+            // Проверяем, что заказ принадлежит пользователю
+            // TODO: Добавить проверку в OrderService или здесь
+            return Ok(order);
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
     }
 
     [HttpPost]

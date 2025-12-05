@@ -1,0 +1,90 @@
+using InternetShopService_back.Data;
+using InternetShopService_back.Modules.OrderManagement.Models;
+using Microsoft.EntityFrameworkCore;
+
+namespace InternetShopService_back.Modules.OrderManagement.Repositories;
+
+public class OrderRepository : IOrderRepository
+{
+    private readonly ApplicationDbContext _context;
+
+    public OrderRepository(ApplicationDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<Order?> GetByIdAsync(Guid id)
+    {
+        return await _context.Orders
+            .Include(o => o.Items)
+            .Include(o => o.DeliveryAddress)
+            .Include(o => o.CargoReceiver)
+            .Include(o => o.Attachments)
+            .Include(o => o.StatusHistory)
+            .FirstOrDefaultAsync(o => o.Id == id);
+    }
+
+    public async Task<List<Order>> GetByUserIdAsync(Guid userId)
+    {
+        return await _context.Orders
+            .Include(o => o.Items)
+            .Include(o => o.DeliveryAddress)
+            .Include(o => o.CargoReceiver)
+            .Where(o => o.UserAccountId == userId)
+            .OrderByDescending(o => o.CreatedAt)
+            .ToListAsync();
+    }
+
+    public async Task<Order> CreateAsync(Order order)
+    {
+        order.CreatedAt = DateTime.UtcNow;
+        order.UpdatedAt = DateTime.UtcNow;
+
+        if (string.IsNullOrEmpty(order.OrderNumber))
+        {
+            order.OrderNumber = await GenerateOrderNumberAsync();
+        }
+
+        _context.Orders.Add(order);
+        await _context.SaveChangesAsync();
+
+        return order;
+    }
+
+    public async Task<Order> UpdateAsync(Order order)
+    {
+        order.UpdatedAt = DateTime.UtcNow;
+
+        _context.Orders.Update(order);
+        await _context.SaveChangesAsync();
+
+        return order;
+    }
+
+    public async Task<string> GenerateOrderNumberAsync()
+    {
+        var today = DateTime.UtcNow.Date;
+        var year = today.Year;
+        var month = today.Month;
+
+        // Получаем последний номер заказа за текущий месяц
+        var lastOrder = await _context.Orders
+            .Where(o => o.CreatedAt.Year == year && o.CreatedAt.Month == month)
+            .OrderByDescending(o => o.OrderNumber)
+            .FirstOrDefaultAsync();
+
+        int nextNumber = 1;
+        if (lastOrder != null && !string.IsNullOrEmpty(lastOrder.OrderNumber))
+        {
+            // Пытаемся извлечь номер из строки формата "ORD-YYYY-MM-XXXX"
+            var parts = lastOrder.OrderNumber.Split('-');
+            if (parts.Length == 4 && int.TryParse(parts[3], out var lastNumber))
+            {
+                nextNumber = lastNumber + 1;
+            }
+        }
+
+        return $"ORD-{year}-{month:D2}-{nextNumber:D4}";
+    }
+}
+

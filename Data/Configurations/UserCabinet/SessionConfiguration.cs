@@ -20,9 +20,22 @@ public class SessionConfiguration : IEntityTypeConfiguration<Session>
             .IsRequired()
             .HasMaxLength(2000); // JWT токены могут быть длинными
 
+        builder.Property(x => x.DeviceInfo)
+            .HasMaxLength(500);
+
+        builder.Property(x => x.UserAgent)
+            .HasMaxLength(1000);
+
+        builder.Property(x => x.IpAddress)
+            .HasMaxLength(50);
+
+        builder.Property(x => x.DeviceName)
+            .HasMaxLength(200);
+
         builder.HasIndex(x => x.AccessToken);
         builder.HasIndex(x => x.RefreshToken);
         builder.HasIndex(x => x.UserAccountId);
+        builder.HasIndex(x => new { x.UserAccountId, x.IsActive });
 
         builder.HasOne(x => x.UserAccount)
             .WithMany(x => x.Sessions)

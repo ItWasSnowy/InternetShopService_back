@@ -17,6 +17,9 @@ service ContractorSyncService {
   
   // Подписка на изменения контрагентов
   rpc SubscribeToChanges (SubscribeRequest) returns (stream ContractorChange);
+  
+  // Получить список активных сессий контрагента
+  rpc GetActiveSessions (GetActiveSessionsRequest) returns (GetActiveSessionsResponse);
 }
 
 // Запрос списка контрагентов
@@ -72,6 +75,7 @@ enum ContractorChangeType {
 message ContractorChange {
   ContractorChangeType change_type = 1;
   Contractor contractor = 2;
+  optional SessionControl session_control = 3;  // Управление сессиями
 }
 
 // Контрагент
@@ -164,5 +168,40 @@ message DiscountRule {
   string create_user_id = 13;
   optional string update_user_id = 14;
   optional string comment = 15;
+}
+
+// Управление сессиями пользователей интернет-магазина
+message SessionControl {
+  int32 contractor_id = 1;
+  SessionAction action = 2;
+  repeated string session_ids = 3;  // GUID сессий для отключения (если action = DEACTIVATE_BY_ID)
+  optional string reason = 4;  // Причина деактивации
+  int64 requested_at = 5;  // Unix timestamp запроса
+}
+
+enum SessionAction {
+  DEACTIVATE_ALL = 0;        // Отключить все сессии
+  DEACTIVATE_BY_ID = 1;      // Отключить конкретные сессии по ID
+}
+
+// Информация о сессии для передачи в FimBiz
+message SessionInfo {
+  string session_id = 1;     // GUID сессии
+  string device_info = 2;    // Информация об устройстве
+  string user_agent = 3;     // User-Agent
+  string ip_address = 4;     // IP адрес
+  int64 created_at = 5;      // Unix timestamp создания
+  int64 expires_at = 6;      // Unix timestamp истечения
+  bool is_active = 7;        // Активна ли сессия
+}
+
+// Запрос списка активных сессий
+message GetActiveSessionsRequest {
+  int32 contractor_id = 1;
+}
+
+// Ответ со списком активных сессий
+message GetActiveSessionsResponse {
+  repeated SessionInfo sessions = 1;
 }
 

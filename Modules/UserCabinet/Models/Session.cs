@@ -9,6 +9,12 @@ public class Session
     public DateTime ExpiresAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public bool IsActive { get; set; } = true;
+    
+    // Информация об устройстве
+    public string? DeviceInfo { get; set; }  // Информация об устройстве (например: "Chrome on Windows")
+    public string? UserAgent { get; set; }    // User-Agent браузера
+    public string? IpAddress { get; set; }    // IP адрес входа
+    public string? DeviceName { get; set; }   // Название устройства (опционально)
 
     // Navigation properties
     public virtual UserAccount UserAccount { get; set; } = null!;
