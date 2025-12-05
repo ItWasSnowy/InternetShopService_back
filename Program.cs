@@ -1,7 +1,9 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
+using Npgsql;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Calls;
 using InternetShopService_back.Infrastructure.Grpc;
@@ -155,6 +157,57 @@ if (enableAutoSync)
 }
 
 var app = builder.Build();
+
+// Автоматическое создание БД и применение миграций при запуске
+if (!string.IsNullOrEmpty(connectionString))
+{
+    using (var scope = app.Services.CreateScope())
+    {
+        var services = scope.ServiceProvider;
+        try
+        {
+            var dbContext = services.GetRequiredService<ApplicationDbContext>();
+            var logger = services.GetRequiredService<ILogger<Program>>();
+            
+            // Проверяем, существует ли база данных
+            if (!dbContext.Database.CanConnect())
+            {
+                logger.LogInformation("База данных не существует. Создание базы данных и применение миграций...");
+                dbContext.Database.Migrate();
+                logger.LogInformation("База данных успешно создана и миграции применены.");
+            }
+            else
+            {
+                logger.LogInformation("База данных существует. Проверка и применение миграций...");
+                dbContext.Database.Migrate();
+                logger.LogInformation("Миграции применены успешно.");
+            }
+        }
+        catch (PostgresException ex) when (ex.SqlState == "3D000")
+        {
+            // База данных не существует - создаем через миграции
+            var logger = services.GetRequiredService<ILogger<Program>>();
+            logger.LogWarning("База данных не найдена. Попытка создания через миграции...");
+            
+            try
+            {
+                var dbContext = services.GetRequiredService<ApplicationDbContext>();
+                dbContext.Database.Migrate();
+                logger.LogInformation("База данных успешно создана через миграции.");
+            }
+            catch (Exception migrateEx)
+            {
+                logger.LogError(migrateEx, "Ошибка при создании базы данных через миграции. Убедитесь, что PostgreSQL запущен и у пользователя есть права на создание баз данных.");
+            }
+        }
+        catch (Exception ex)
+        {
+            var logger = services.GetRequiredService<ILogger<Program>>();
+            logger.LogError(ex, "Произошла ошибка при применении миграций базы данных. Приложение продолжит работу, но некоторые функции могут быть недоступны.");
+            // Не прерываем запуск приложения, просто логируем ошибку
+        }
+    }
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
