@@ -14,6 +14,8 @@ public class CartItemDto
     public string NomenclatureName { get; set; } = string.Empty;
     public int Quantity { get; set; }
     public decimal Price { get; set; }
+    public decimal DiscountPercent { get; set; }
+    public decimal PriceWithDiscount { get; set; }
     public decimal TotalAmount { get; set; }
 }
 

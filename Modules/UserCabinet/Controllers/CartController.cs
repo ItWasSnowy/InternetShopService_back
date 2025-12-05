@@ -1,11 +1,14 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
+using InternetShopService_back.Modules.UserCabinet.Helpers;
 using InternetShopService_back.Modules.UserCabinet.Services;
 
 namespace InternetShopService_back.Modules.UserCabinet.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class CartController : ControllerBase
 {
     private readonly ICartService _cartService;
@@ -18,46 +21,143 @@ public class CartController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetCart()
     {
-        // TODO: Get userId from JWT token
-        var userId = Guid.NewGuid(); // Placeholder
-        var cart = await _cartService.GetCartAsync(userId);
-        return Ok(cart);
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var cart = await _cartService.GetCartAsync(userId.Value);
+            return Ok(cart);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
     }
 
     [HttpPost("add")]
     public async Task<IActionResult> AddItem([FromBody] AddCartItemDto item)
     {
-        // TODO: Get userId from JWT token
-        var userId = Guid.NewGuid(); // Placeholder
-        var cart = await _cartService.AddItemAsync(userId, item);
-        return Ok(cart);
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var cart = await _cartService.AddItemAsync(userId.Value, item);
+            return Ok(cart);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
     }
 
     [HttpPut("{itemId}")]
     public async Task<IActionResult> UpdateItem(Guid itemId, [FromBody] UpdateCartItemDto dto)
     {
-        // TODO: Get userId from JWT token
-        var userId = Guid.NewGuid(); // Placeholder
-        var cart = await _cartService.UpdateItemAsync(userId, itemId, dto.Quantity);
-        return Ok(cart);
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var cart = await _cartService.UpdateItemAsync(userId.Value, itemId, dto.Quantity);
+            return Ok(cart);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
     }
 
     [HttpDelete("{itemId}")]
     public async Task<IActionResult> RemoveItem(Guid itemId)
     {
-        // TODO: Get userId from JWT token
-        var userId = Guid.NewGuid(); // Placeholder
-        await _cartService.RemoveItemAsync(userId, itemId);
-        return NoContent();
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var result = await _cartService.RemoveItemAsync(userId.Value, itemId);
+            if (!result)
+            {
+                return NotFound(new { error = "Товар не найден в корзине" });
+            }
+            return NoContent();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
     }
 
     [HttpDelete("clear")]
     public async Task<IActionResult> ClearCart()
     {
-        // TODO: Get userId from JWT token
-        var userId = Guid.NewGuid(); // Placeholder
-        await _cartService.ClearCartAsync(userId);
-        return NoContent();
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var result = await _cartService.ClearCartAsync(userId.Value);
+            if (!result)
+            {
+                return NotFound(new { error = "Корзина не найдена" });
+            }
+            return NoContent();
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
     }
 }
 

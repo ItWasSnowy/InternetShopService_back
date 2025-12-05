@@ -10,6 +10,32 @@ public class UserAccount
     public string? PasswordHash { get; set; } // null если пароль не установлен
     public bool IsPasswordSet { get; set; }
     public bool IsFirstLogin { get; set; } = true; // Флаг первого входа
+    
+    /// <summary>
+    /// Пин-код, отправленный в последнем звонке (последние 4 цифры)
+    /// </summary>
+    public string? PhoneCallDigits { get; set; }
+    
+    /// <summary>
+    /// Время отправки последнего звонка (в UTC)
+    /// </summary>
+    public DateTime? PhoneCallDateTime { get; set; }
+    
+    /// <summary>
+    /// Новый номер телефона, который пользователь хочет установить
+    /// </summary>
+    public string? NewPhoneNumber { get; set; }
+    
+    /// <summary>
+    /// Количество неудачных попыток входа
+    /// </summary>
+    public int AccessFailedCount { get; set; }
+    
+    /// <summary>
+    /// Время первой неудачной попытки входа
+    /// </summary>
+    public DateTime? FirstFailedLoginAttempt { get; set; }
+    
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
