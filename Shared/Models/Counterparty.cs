@@ -18,6 +18,7 @@ public class Counterparty
     public string? LegalAddress { get; set; }
     public string? EdoIdentifier { get; set; } // Идентификатор ЭДО для B2B
     public bool HasPostPayment { get; set; } // Постоплата
+    public bool IsCreateCabinet { get; set; } // Флаг создания личного кабинета в интернет-магазине
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

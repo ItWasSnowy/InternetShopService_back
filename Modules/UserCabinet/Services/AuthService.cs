@@ -17,6 +17,7 @@ public class AuthService : IAuthService
     private readonly IUserAccountRepository _userAccountRepository;
     private readonly ISessionRepository _sessionRepository;
     private readonly ICounterpartyRepository _counterpartyRepository;
+    private readonly IShopRepository _shopRepository;
     private readonly ICallService _callService;
     private readonly IJwtTokenService _jwtTokenService;
     private readonly IFimBizGrpcClient _fimBizGrpcClient;
@@ -31,6 +32,7 @@ public class AuthService : IAuthService
         IUserAccountRepository userAccountRepository,
         ISessionRepository sessionRepository,
         ICounterpartyRepository counterpartyRepository,
+        IShopRepository shopRepository,
         ICallService callService,
         IJwtTokenService jwtTokenService,
         IFimBizGrpcClient fimBizGrpcClient,
@@ -40,6 +42,7 @@ public class AuthService : IAuthService
         _userAccountRepository = userAccountRepository;
         _sessionRepository = sessionRepository;
         _counterpartyRepository = counterpartyRepository;
+        _shopRepository = shopRepository;
         _callService = callService;
         _jwtTokenService = jwtTokenService;
         _fimBizGrpcClient = fimBizGrpcClient;
@@ -71,6 +74,12 @@ public class AuthService : IAuthService
                 if (fimBizCounterparty == null)
                 {
                     throw new InvalidOperationException("Контрагент с таким номером телефона не найден в FimBiz");
+                }
+
+                // Проверяем флаг создания кабинета
+                if (!fimBizCounterparty.IsCreateCabinet)
+                {
+                    throw new InvalidOperationException("Для данного контрагента не разрешено создание кабинета в интернет-магазине");
                 }
 
                 // Проверяем, существует ли контрагент в локальной БД
@@ -112,16 +121,35 @@ public class AuthService : IAuthService
                     localCounterparty.FimBizCompanyId = fimBizCounterparty.FimBizCompanyId;
                     localCounterparty.FimBizOrganizationId = fimBizCounterparty.FimBizOrganizationId;
                     localCounterparty.LastSyncVersion = fimBizCounterparty.LastSyncVersion;
+                    localCounterparty.IsCreateCabinet = fimBizCounterparty.IsCreateCabinet;
                     localCounterparty.UpdatedAt = DateTime.UtcNow;
                     
                     localCounterparty = await _counterpartyRepository.UpdateAsync(localCounterparty);
                 }
 
-                // Создаем новый аккаунт с правильным CounterpartyId
+                // Находим Shop по FimBizCompanyId контрагента
+                if (!localCounterparty.FimBizCompanyId.HasValue)
+                {
+                    throw new InvalidOperationException("У контрагента не указан FimBizCompanyId. Невозможно определить магазин.");
+                }
+
+                var shop = await _shopRepository.GetByFimBizCompanyIdAsync(
+                    localCounterparty.FimBizCompanyId.Value,
+                    localCounterparty.FimBizOrganizationId);
+
+                if (shop == null || !shop.IsActive)
+                {
+                    throw new InvalidOperationException(
+                        $"Интернет-магазин для компании {localCounterparty.FimBizCompanyId} не найден или неактивен. " +
+                        $"Обратитесь к администратору для создания магазина.");
+                }
+
+                // Создаем новый аккаунт с правильным CounterpartyId и ShopId
                 userAccount = new UserAccount
                 {
                     Id = Guid.NewGuid(),
                     CounterpartyId = localCounterparty.Id,
+                    ShopId = shop.Id,
                     PhoneNumber = phoneNumber,
                     IsFirstLogin = true,
                     IsPasswordSet = false,
@@ -246,7 +274,8 @@ public class AuthService : IAuthService
             var (accessToken, refreshToken) = _jwtTokenService.GenerateTokens(
                 userAccount.Id,
                 userAccount.PhoneNumber,
-                userAccount.CounterpartyId);
+                userAccount.CounterpartyId,
+                userAccount.ShopId);
 
             // Создание сессии
             var session = new Session
@@ -312,7 +341,8 @@ public class AuthService : IAuthService
             var (accessToken, refreshToken) = _jwtTokenService.GenerateTokens(
                 userAccount.Id,
                 userAccount.PhoneNumber,
-                userAccount.CounterpartyId);
+                userAccount.CounterpartyId,
+                userAccount.ShopId);
 
             var session = new Session
             {
@@ -398,7 +428,8 @@ public class AuthService : IAuthService
             var (accessToken, refreshToken) = _jwtTokenService.GenerateTokens(
                 userAccount.Id,
                 userAccount.PhoneNumber,
-                userAccount.CounterpartyId);
+                userAccount.CounterpartyId,
+                userAccount.ShopId);
 
             var session = new Session
             {

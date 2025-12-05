@@ -25,13 +25,14 @@ public class JwtTokenService : IJwtTokenService
         _expirationMinutes = _configuration.GetValue<int>("JwtSettings:ExpirationMinutes", 60);
     }
 
-    public (string AccessToken, string RefreshToken) GenerateTokens(Guid userId, string phoneNumber, Guid counterpartyId)
+    public (string AccessToken, string RefreshToken) GenerateTokens(Guid userId, string phoneNumber, Guid counterpartyId, Guid shopId)
     {
         var claims = new[]
         {
             new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
             new Claim(ClaimTypes.MobilePhone, phoneNumber),
             new Claim("CounterpartyId", counterpartyId.ToString()),
+            new Claim("ShopId", shopId.ToString()),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 

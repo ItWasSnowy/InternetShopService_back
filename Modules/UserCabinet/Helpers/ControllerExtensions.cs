@@ -61,5 +61,26 @@ public static class ControllerExtensions
     {
         return GetPhoneNumber(controller.HttpContext);
     }
+
+    public static Guid? GetShopId(this HttpContext context)
+    {
+        if (context.Items.TryGetValue("ShopId", out var shopId) && shopId is Guid guid)
+        {
+            return guid;
+        }
+
+        var shopIdClaim = context.User.FindFirst("ShopId");
+        if (shopIdClaim != null && Guid.TryParse(shopIdClaim.Value, out var parsedShopId))
+        {
+            return parsedShopId;
+        }
+
+        return null;
+    }
+
+    public static Guid? GetShopId(this ControllerBase controller)
+    {
+        return GetShopId(controller.HttpContext);
+    }
 }
 

@@ -3,6 +3,7 @@ using System;
 using InternetShopService_back.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace InternetShopService_back.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251205120747_AddShopEntity")]
+    partial class AddShopEntity
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -649,9 +652,6 @@ namespace InternetShopService_back.Migrations
                         .HasMaxLength(12)
                         .HasColumnType("character varying(12)");
 
-                    b.Property<bool>("IsCreateCabinet")
-                        .HasColumnType("boolean");
-
                     b.Property<string>("Kpp")
                         .HasMaxLength(9)
                         .HasColumnType("character varying(9)");
@@ -681,8 +681,6 @@ namespace InternetShopService_back.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("FimBizContractorId");
-
-                    b.HasIndex("IsCreateCabinet");
 
                     b.HasIndex("PhoneNumber");
 

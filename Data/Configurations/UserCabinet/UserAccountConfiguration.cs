@@ -26,6 +26,13 @@ public class UserAccountConfiguration : IEntityTypeConfiguration<UserAccount>
             .WithOne(x => x.UserAccount)
             .HasForeignKey<UserAccount>(x => x.CounterpartyId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.Shop)
+            .WithMany(x => x.UserAccounts)
+            .HasForeignKey(x => x.ShopId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasIndex(x => x.ShopId);
     }
 }
 

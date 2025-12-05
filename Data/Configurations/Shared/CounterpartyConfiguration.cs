@@ -32,6 +32,7 @@ public class CounterpartyConfiguration : IEntityTypeConfiguration<Counterparty>
         builder.HasIndex(x => x.PhoneNumber);
         builder.HasIndex(x => x.FimBizContractorId);
         builder.HasIndex(x => new { x.FimBizCompanyId, x.FimBizOrganizationId });
+        builder.HasIndex(x => x.IsCreateCabinet);
     }
 }
 

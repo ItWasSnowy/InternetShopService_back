@@ -7,7 +7,7 @@ public interface IJwtTokenService
     /// <summary>
     /// Генерирует пару токенов (access и refresh) для пользователя
     /// </summary>
-    (string AccessToken, string RefreshToken) GenerateTokens(Guid userId, string phoneNumber, Guid counterpartyId);
+    (string AccessToken, string RefreshToken) GenerateTokens(Guid userId, string phoneNumber, Guid counterpartyId, Guid shopId);
 
     /// <summary>
     /// Валидирует access token

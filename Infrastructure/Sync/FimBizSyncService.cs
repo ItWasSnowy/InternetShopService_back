@@ -2,6 +2,7 @@ using Grpc.Core;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Contractors;
+using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Shared.Repositories;
 using Microsoft.EntityFrameworkCore;
@@ -51,46 +52,68 @@ public class FimBizSyncService : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var grpcClient = scope.ServiceProvider.GetRequiredService<IFimBizGrpcClient>();
         var counterpartyRepository = scope.ServiceProvider.GetRequiredService<ICounterpartyRepository>();
+        var shopRepository = scope.ServiceProvider.GetRequiredService<IShopRepository>();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
         try
         {
             _logger.LogInformation("Начало полной синхронизации контрагентов");
 
-            var companyId = _configuration.GetValue<int?>("FimBiz:CompanyId");
-            var organizationId = _configuration.GetValue<int?>("FimBiz:OrganizationId");
-
-            // Получаем всех контрагентов с корпоративным телефоном
-            var request = new GetContractorsRequest
-            {
-                WithCorporatePhone = true,
-                BuyersOnly = true,
-                PageSize = 1000
-            };
+            // Получаем все активные магазины
+            var activeShops = await shopRepository.GetAllActiveAsync();
             
-            if (companyId.HasValue && companyId.Value > 0)
+            if (!activeShops.Any())
             {
-                request.CompanyId = companyId.Value;
-            }
-            
-            if (organizationId.HasValue && organizationId.Value > 0)
-            {
-                request.OrganizationId = organizationId.Value;
+                _logger.LogWarning("Не найдено активных магазинов для синхронизации");
+                return;
             }
 
-            var response = await grpcClient.GetContractorsAsync(request);
-            
-            int syncedCount = 0;
-            foreach (var contractor in response.Contractors)
+            int totalSyncedCount = 0;
+
+            // Синхронизируем контрагентов для каждого магазина
+            foreach (var shop in activeShops)
             {
                 if (cancellationToken.IsCancellationRequested)
                     break;
 
-                await SyncContractorAsync(contractor, counterpartyRepository, dbContext, cancellationToken);
-                syncedCount++;
+                _logger.LogInformation("Синхронизация контрагентов для магазина {ShopName} (CompanyId: {CompanyId})", 
+                    shop.Name, shop.FimBizCompanyId);
+
+                // Получаем контрагентов для этого магазина
+                // Синхронизируем только контрагентов с флагом создания кабинета
+                var request = new GetContractorsRequest
+                {
+                    CompanyId = shop.FimBizCompanyId,
+                    WithCorporatePhone = true,
+                    WithCreateCabinet = true,  // Только контрагенты с флагом создания кабинета
+                    BuyersOnly = true,
+                    PageSize = 1000
+                };
+                
+                if (shop.FimBizOrganizationId.HasValue)
+                {
+                    request.OrganizationId = shop.FimBizOrganizationId.Value;
+                }
+
+                var response = await grpcClient.GetContractorsAsync(request);
+                
+                int shopSyncedCount = 0;
+                foreach (var contractor in response.Contractors)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+
+                    await SyncContractorAsync(contractor, counterpartyRepository, dbContext, cancellationToken);
+                    shopSyncedCount++;
+                }
+
+                totalSyncedCount += shopSyncedCount;
+                _logger.LogInformation("Синхронизировано {Count} контрагентов для магазина {ShopName}", 
+                    shopSyncedCount, shop.Name);
             }
 
-            _logger.LogInformation("Полная синхронизация завершена. Синхронизировано {Count} контрагентов", syncedCount);
+            _logger.LogInformation("Полная синхронизация завершена. Всего синхронизировано {Count} контрагентов для {ShopCount} магазинов", 
+                totalSyncedCount, activeShops.Count);
         }
         catch (Exception ex)
         {
@@ -99,6 +122,51 @@ public class FimBizSyncService : BackgroundService
     }
 
     private async Task SubscribeToChangesAsync(CancellationToken cancellationToken)
+    {
+        // Для каждого магазина создаем отдельную подписку
+        // Запускаем их параллельно
+        var tasks = new List<Task>();
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var shopRepository = scope.ServiceProvider.GetRequiredService<IShopRepository>();
+                var activeShops = await shopRepository.GetAllActiveAsync();
+
+                if (!activeShops.Any())
+                {
+                    _logger.LogWarning("Не найдено активных магазинов для подписки на изменения");
+                    await Task.Delay(TimeSpan.FromMinutes(5), cancellationToken);
+                    continue;
+                }
+
+                // Очищаем завершенные задачи
+                tasks.RemoveAll(t => t.IsCompleted);
+
+                // Создаем подписку для каждого магазина
+                foreach (var shop in activeShops)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+
+                    var shopTask = SubscribeToShopChangesAsync(shop, cancellationToken);
+                    tasks.Add(shopTask);
+                }
+
+                // Ждем завершения всех подписок
+                await Task.WhenAll(tasks);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка в подписке на изменения. Переподключение через 30 секунд...");
+                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+            }
+        }
+    }
+
+    private async Task SubscribeToShopChangesAsync(Shop shop, CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -109,44 +177,38 @@ public class FimBizSyncService : BackgroundService
                 var counterpartyRepository = scope.ServiceProvider.GetRequiredService<ICounterpartyRepository>();
                 var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
 
-                var companyId = _configuration.GetValue<int?>("FimBiz:CompanyId");
-                var organizationId = _configuration.GetValue<int?>("FimBiz:OrganizationId");
-
-                // Получаем последнюю версию синхронизации из БД
-                var lastSyncVersion = await GetLastSyncVersionAsync(dbContext, companyId, organizationId);
+                // Получаем последнюю версию синхронизации для этого магазина
+                var lastSyncVersion = await GetLastSyncVersionAsync(dbContext, shop.FimBizCompanyId, shop.FimBizOrganizationId);
 
                 var subscribeRequest = new SubscribeRequest
                 {
+                    CompanyId = shop.FimBizCompanyId,
                     LastSyncVersion = lastSyncVersion
                 };
                 
-                if (companyId.HasValue && companyId.Value > 0)
+                if (shop.FimBizOrganizationId.HasValue)
                 {
-                    subscribeRequest.CompanyId = companyId.Value;
-                }
-                
-                if (organizationId.HasValue && organizationId.Value > 0)
-                {
-                    subscribeRequest.OrganizationId = organizationId.Value;
+                    subscribeRequest.OrganizationId = shop.FimBizOrganizationId.Value;
                 }
 
-                _logger.LogInformation("Подписка на изменения контрагентов с версии {LastSyncVersion}", lastSyncVersion);
+                _logger.LogInformation("Подписка на изменения контрагентов для магазина {ShopName} (CompanyId: {CompanyId}) с версии {LastSyncVersion}", 
+                    shop.Name, shop.FimBizCompanyId, lastSyncVersion);
 
-                var call = grpcClient.SubscribeToChanges(subscribeRequest);
+                using var call = grpcClient.SubscribeToChanges(subscribeRequest);
                 
                 await foreach (var change in call.ResponseStream.ReadAllAsync(cancellationToken))
                 {
-                    await ProcessContractorChangeAsync(change, counterpartyRepository, dbContext);
+                    await ProcessContractorChangeAsync(change, counterpartyRepository, dbContext, cancellationToken);
                 }
             }
             catch (RpcException ex) when (ex.StatusCode == StatusCode.Cancelled)
             {
-                _logger.LogInformation("Подписка отменена");
+                _logger.LogInformation("Подписка для магазина {ShopName} отменена", shop.Name);
                 break;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка в подписке на изменения. Переподключение через 30 секунд...");
+                _logger.LogError(ex, "Ошибка в подписке на изменения для магазина {ShopName}. Переподключение через 30 секунд...", shop.Name);
                 await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
             }
         }
@@ -155,24 +217,33 @@ public class FimBizSyncService : BackgroundService
     private async Task ProcessContractorChangeAsync(
         ContractorChange change,
         ICounterpartyRepository counterpartyRepository,
-        ApplicationDbContext dbContext)
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
     {
         try
         {
             var contractor = change.Contractor;
             
+            // Если флаг is_create_cabinet = false, не синхронизируем контрагента (если его еще нет в БД)
+            // Если контрагент уже есть, обновляем его и деактивируем кабинет
+            if (!contractor.IsCreateCabinet && change.ChangeType == ContractorChangeType.Created)
+            {
+                _logger.LogInformation("Контрагент {ContractorId} пропущен, так как is_create_cabinet = false", contractor.ContractorId);
+                return;
+            }
+            
             switch (change.ChangeType)
             {
                 case ContractorChangeType.Created:
                 case ContractorChangeType.Updated:
-                    await SyncContractorAsync(contractor, counterpartyRepository, dbContext, CancellationToken.None);
+                    await SyncContractorAsync(contractor, counterpartyRepository, dbContext, cancellationToken);
                     _logger.LogInformation("Контрагент {ContractorId} {Action}", 
                         contractor.ContractorId, 
                         change.ChangeType == ContractorChangeType.Created ? "создан" : "обновлен");
                     break;
 
                 case ContractorChangeType.Deleted:
-                    await DeleteContractorAsync(contractor.ContractorId, counterpartyRepository, dbContext);
+                    await DeleteContractorAsync(contractor.ContractorId, counterpartyRepository, dbContext, cancellationToken);
                     _logger.LogInformation("Контрагент {ContractorId} удален", contractor.ContractorId);
                     break;
             }
@@ -192,6 +263,10 @@ public class FimBizSyncService : BackgroundService
         // Найти существующего контрагента по FimBizContractorId
         var existing = await counterpartyRepository.GetByFimBizIdAsync(contractor.ContractorId);
         
+        // Проверяем, изменился ли флаг is_create_cabinet с true на false
+        bool wasCreateCabinetEnabled = existing?.IsCreateCabinet ?? false;
+        bool isCreateCabinetEnabled = contractor.IsCreateCabinet;
+        
         var counterparty = existing ?? new Counterparty
         {
             Id = Guid.NewGuid(),
@@ -210,6 +285,7 @@ public class FimBizSyncService : BackgroundService
         counterparty.Kpp = string.IsNullOrEmpty(contractor.Kpp) ? null : contractor.Kpp;
         counterparty.LegalAddress = string.IsNullOrEmpty(contractor.Address) ? null : contractor.Address;
         counterparty.LastSyncVersion = contractor.SyncVersion > 0 ? contractor.SyncVersion : null;
+        counterparty.IsCreateCabinet = contractor.IsCreateCabinet;
         counterparty.UpdatedAt = DateTime.UtcNow;
 
         if (existing == null)
@@ -219,6 +295,14 @@ public class FimBizSyncService : BackgroundService
         else
         {
             await counterpartyRepository.UpdateAsync(counterparty);
+        }
+
+        // Если флаг is_create_cabinet изменился с true на false, деактивируем все активные сессии
+        if (wasCreateCabinetEnabled && !isCreateCabinetEnabled && existing != null)
+        {
+            await DeactivateUserSessionsAsync(counterparty.Id, dbContext, cancellationToken);
+            _logger.LogWarning("Флаг is_create_cabinet для контрагента {ContractorId} изменен на false. Все активные сессии деактивированы.", 
+                contractor.ContractorId);
         }
 
         // Синхронизируем скидки
@@ -285,7 +369,8 @@ public class FimBizSyncService : BackgroundService
     private async Task DeleteContractorAsync(
         int fimBizContractorId,
         ICounterpartyRepository counterpartyRepository,
-        ApplicationDbContext dbContext)
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
     {
         var counterparty = await counterpartyRepository.GetByFimBizIdAsync(fimBizContractorId);
         if (counterparty != null)
@@ -302,7 +387,7 @@ public class FimBizSyncService : BackgroundService
 
             // Удаляем контрагента
             dbContext.Counterparties.Remove(counterparty);
-            await dbContext.SaveChangesAsync();
+            await dbContext.SaveChangesAsync(cancellationToken);
             
             _logger.LogWarning("Контрагент {ContractorId} удален из локальной БД", fimBizContractorId);
         }
@@ -341,6 +426,38 @@ public class FimBizSyncService : BackgroundService
             .MaxAsync(c => (int?)c.LastSyncVersion) ?? 0;
 
         return maxVersion;
+    }
+
+    private async Task DeactivateUserSessionsAsync(
+        Guid counterpartyId,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        // Находим UserAccount для этого контрагента
+        var userAccount = await dbContext.UserAccounts
+            .FirstOrDefaultAsync(u => u.CounterpartyId == counterpartyId, cancellationToken);
+
+        if (userAccount == null)
+        {
+            return; // Нет кабинета для этого контрагента
+        }
+
+        // Деактивируем все активные сессии
+        var activeSessions = await dbContext.Sessions
+            .Where(s => s.UserAccountId == userAccount.Id && s.IsActive && s.ExpiresAt > DateTime.UtcNow)
+            .ToListAsync(cancellationToken);
+
+        foreach (var session in activeSessions)
+        {
+            session.IsActive = false;
+        }
+
+        if (activeSessions.Any())
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation("Деактивировано {Count} активных сессий для контрагента {CounterpartyId}", 
+                activeSessions.Count, counterpartyId);
+        }
     }
 }
 

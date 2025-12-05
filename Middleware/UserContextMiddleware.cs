@@ -26,6 +26,12 @@ public class UserContextMiddleware
             {
                 context.Items["CounterpartyId"] = counterpartyId;
             }
+
+            var shopIdClaim = context.User.FindFirst("ShopId");
+            if (shopIdClaim != null && Guid.TryParse(shopIdClaim.Value, out var shopId))
+            {
+                context.Items["ShopId"] = shopId;
+            }
         }
 
         await _next(context);

@@ -97,6 +97,7 @@ builder.Services.AddScoped<IUserAccountRepository, UserAccountRepository>();
 builder.Services.AddScoped<ISessionRepository, SessionRepository>();
 builder.Services.AddScoped<ICartRepository, CartRepository>();
 builder.Services.AddScoped<ICounterpartyRepository, CounterpartyRepository>();
+builder.Services.AddScoped<IShopRepository, ShopRepository>();
 
 // Infrastructure services
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();

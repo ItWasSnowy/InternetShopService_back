@@ -257,6 +257,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
             LegalAddress = string.IsNullOrEmpty(contractor.Address) ? null : contractor.Address,
             EdoIdentifier = null, // Пока нет в proto
             HasPostPayment = false, // Пока нет в proto, нужно добавить
+            IsCreateCabinet = contractor.IsCreateCabinet,
             CreatedAt = createdAt,
             UpdatedAt = updatedAt
         };

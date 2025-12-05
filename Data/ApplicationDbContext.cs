@@ -12,6 +12,7 @@ public class ApplicationDbContext : DbContext
     }
 
     // Shared
+    public DbSet<Shop> Shops { get; set; }
     public DbSet<Counterparty> Counterparties { get; set; }
     public DbSet<Discount> Discounts { get; set; }
 

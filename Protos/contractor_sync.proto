@@ -29,6 +29,7 @@ message GetContractorsRequest {
   optional int32 page_size = 6;
   optional bool buyers_only = 7;
   optional bool with_corporate_phone = 8;
+  optional bool with_create_cabinet = 9;  // Фильтр: только контрагенты с флагом создания кабинета
 }
 
 // Ответ со списком контрагентов
@@ -126,6 +127,7 @@ message Contractor {
   // Интернет-магазин
   optional string corporate_phone_number = 29;
   optional int64 corporate_phone_changed_at = 30;
+  bool is_create_cabinet = 35;  // Флаг создания личного кабинета в интернет-магазине
   
   // Служебные поля
   int32 sync_version = 31;

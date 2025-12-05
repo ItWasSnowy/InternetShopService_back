@@ -6,6 +6,7 @@ public class UserAccount
 {
     public Guid Id { get; set; }
     public Guid CounterpartyId { get; set; }
+    public Guid ShopId { get; set; } // К какому интернет-магазину относится кабинет
     public string PhoneNumber { get; set; } = string.Empty;
     public string? PasswordHash { get; set; } // null если пароль не установлен
     public bool IsPasswordSet { get; set; }
@@ -42,6 +43,7 @@ public class UserAccount
 
     // Navigation properties
     public virtual Counterparty Counterparty { get; set; } = null!;
+    public virtual Shop Shop { get; set; } = null!;
     public virtual Cart? Cart { get; set; }
     public virtual ICollection<Session> Sessions { get; set; } = new List<Session>();
     public virtual ICollection<DeliveryAddress> DeliveryAddresses { get; set; } = new List<DeliveryAddress>();
