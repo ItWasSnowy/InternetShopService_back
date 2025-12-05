@@ -499,6 +499,88 @@ public class AuthService : IAuthService
         }
     }
 
+    public async Task<AuthResponseDto> RefreshTokenAsync(string refreshToken)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(refreshToken))
+            {
+                throw new ArgumentException("Refresh token не предоставлен");
+            }
+
+            // Находим сессию по refresh token
+            var session = await _sessionRepository.GetByRefreshTokenAsync(refreshToken);
+            if (session == null)
+            {
+                throw new UnauthorizedAccessException("Неверный refresh token");
+            }
+
+            // Проверяем, что сессия активна и не истекла
+            if (!session.IsActive)
+            {
+                throw new UnauthorizedAccessException("Сессия деактивирована");
+            }
+
+            if (session.ExpiresAt <= DateTime.UtcNow)
+            {
+                // Деактивируем истекшую сессию
+                session.IsActive = false;
+                await _sessionRepository.UpdateAsync(session);
+                throw new UnauthorizedAccessException("Refresh token истек. Необходима повторная авторизация");
+            }
+
+            // Получаем данные пользователя
+            var userAccount = await _userAccountRepository.GetByIdAsync(session.UserAccountId);
+            if (userAccount == null)
+            {
+                throw new InvalidOperationException("Пользователь не найден");
+            }
+
+            // Генерируем новые токены
+            var (newAccessToken, newRefreshToken) = _jwtTokenService.GenerateTokens(
+                userAccount.Id,
+                userAccount.PhoneNumber,
+                userAccount.CounterpartyId,
+                userAccount.ShopId);
+
+            // Обновляем сессию с новыми токенами
+            session.AccessToken = newAccessToken;
+            session.RefreshToken = newRefreshToken;
+            session.ExpiresAt = DateTime.UtcNow.AddHours(24); // Refresh token живет 24 часа
+            await _sessionRepository.UpdateAsync(session);
+
+            _logger.LogInformation("Токены обновлены для пользователя {UserId}", userAccount.Id);
+
+            return new AuthResponseDto
+            {
+                AccessToken = newAccessToken,
+                RefreshToken = newRefreshToken,
+                RequiresPasswordSetup = false,
+                User = new UserInfoDto
+                {
+                    Id = userAccount.Id,
+                    PhoneNumber = userAccount.PhoneNumber,
+                    CounterpartyId = userAccount.CounterpartyId
+                }
+            };
+        }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(ex, "Ошибка валидации refresh token");
+            throw;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogWarning(ex, "Неверный или истекший refresh token");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при обновлении токена");
+            throw;
+        }
+    }
+
     public async Task LogoutAsync(string token)
     {
         try

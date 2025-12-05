@@ -8,6 +8,7 @@ public interface IAuthService
     Task<AuthResponseDto> VerifyCodeAsync(string phoneNumber, string code);
     Task<AuthResponseDto> SetPasswordAsync(string phoneNumber, string password);
     Task<AuthResponseDto> LoginByPasswordAsync(string phoneNumber, string password);
+    Task<AuthResponseDto> RefreshTokenAsync(string refreshToken);
     Task<bool> ValidateTokenAsync(string token);
     Task LogoutAsync(string token);
 }
