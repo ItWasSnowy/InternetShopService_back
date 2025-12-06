@@ -20,6 +20,9 @@ service ContractorSyncService {
   
   // Получить список активных сессий контрагента
   rpc GetActiveSessions (GetActiveSessionsRequest) returns (GetActiveSessionsResponse);
+  
+  // Выполнить команду управления сессиями с получением результата
+  rpc ExecuteSessionControl (ExecuteSessionControlRequest) returns (ExecuteSessionControlResponse);
 }
 
 // Запрос списка контрагентов
@@ -203,5 +206,19 @@ message GetActiveSessionsRequest {
 // Ответ со списком активных сессий
 message GetActiveSessionsResponse {
   repeated SessionInfo sessions = 1;
+}
+
+// Запрос на выполнение команды управления сессиями
+message ExecuteSessionControlRequest {
+  SessionControl session_control = 1;   // Команда управления сессиями
+}
+
+// Ответ на выполнение команды управления сессиями
+message ExecuteSessionControlResponse {
+  bool success = 1;                      // Успешно ли выполнена команда
+  string message = 2;                   // Сообщение о результате выполнения
+  int32 disconnected_count = 3;         // Количество отключенных сессий
+  repeated string disconnected_session_ids = 4;  // ID отключенных сессий
+  repeated string error_session_ids = 5;  // ID сессий, которые не удалось отключить
 }
 

@@ -176,6 +176,7 @@ switch (callProvider)
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddScoped<FimBizSessionService>();
+builder.Services.AddScoped<SessionControlService>();
 builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<ICounterpartyService, CounterpartyService>();
 builder.Services.AddScoped<IDeliveryAddressService, DeliveryAddressService>();

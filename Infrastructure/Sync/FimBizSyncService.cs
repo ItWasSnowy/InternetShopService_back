@@ -225,6 +225,9 @@ public class FimBizSyncService : BackgroundService
             // Обработка управления сессиями (если есть)
             if (change.SessionControl != null)
             {
+                _logger.LogInformation("Получено изменение контрагента с командой управления сессиями: ContractorId={ContractorId}, ChangeType={ChangeType}",
+                    change.Contractor?.ContractorId ?? change.SessionControl.ContractorId,
+                    change.ChangeType);
                 await ProcessSessionControlAsync(change.SessionControl, dbContext, cancellationToken);
             }
 
@@ -267,6 +270,16 @@ public class FimBizSyncService : BackgroundService
     {
         try
         {
+            _logger.LogInformation(
+                "Получена команда управления сессиями: ContractorId={ContractorId}, Action={Action} (значение: {ActionValue}), SessionIds={SessionIds}, Reason={Reason}",
+                sessionControl.ContractorId,
+                sessionControl.Action,
+                (int)sessionControl.Action,
+                sessionControl.SessionIds != null && sessionControl.SessionIds.Count > 0 
+                    ? string.Join(", ", sessionControl.SessionIds) 
+                    : "нет",
+                sessionControl.Reason ?? "не указана");
+
             // Находим контрагента по FimBizContractorId
             var counterparty = await dbContext.Counterparties
                 .FirstOrDefaultAsync(c => c.FimBizContractorId == sessionControl.ContractorId, cancellationToken);
@@ -306,33 +319,76 @@ public class FimBizSyncService : BackgroundService
                         _logger.LogInformation("Деактивировано {Count} активных сессий для контрагента {ContractorId} по запросу из FimBiz", 
                             allSessions.Count, sessionControl.ContractorId);
                     }
+                    else
+                    {
+                        _logger.LogInformation("Не найдено активных сессий для деактивации у контрагента {ContractorId}", 
+                            sessionControl.ContractorId);
+                    }
                     break;
 
                 case SessionAction.DeactivateById:
                     // Деактивируем конкретные сессии по ID
-                    if (sessionControl.SessionIds != null && sessionControl.SessionIds.Count > 0)
+                    if (sessionControl.SessionIds == null || sessionControl.SessionIds.Count == 0)
                     {
-                        var sessionIds = sessionControl.SessionIds
-                            .Where(id => Guid.TryParse(id, out _))
-                            .Select(Guid.Parse)
-                            .ToList();
-
-                        var sessions = await dbContext.Sessions
-                            .Where(s => s.UserAccountId == userAccount.Id && sessionIds.Contains(s.Id))
-                            .ToListAsync(cancellationToken);
-
-                        foreach (var session in sessions)
-                        {
-                            session.IsActive = false;
-                        }
-
-                        if (sessions.Any())
-                        {
-                            await dbContext.SaveChangesAsync(cancellationToken);
-                            _logger.LogInformation("Деактивировано {Count} сессий для контрагента {ContractorId} по запросу из FimBiz. Причина: {Reason}", 
-                                sessions.Count, sessionControl.ContractorId, sessionControl.Reason ?? "не указана");
-                        }
+                        _logger.LogWarning("Получена команда DeactivateById без списка SessionIds для контрагента {ContractorId}", 
+                            sessionControl.ContractorId);
+                        return;
                     }
+
+                    var sessionIds = sessionControl.SessionIds
+                        .Where(id => Guid.TryParse(id, out _))
+                        .Select(Guid.Parse)
+                        .ToList();
+
+                    if (sessionIds.Count == 0)
+                    {
+                        _logger.LogWarning("Нет валидных SessionIds для деактивации у контрагента {ContractorId}. Получены: {InvalidIds}", 
+                            sessionControl.ContractorId, 
+                            string.Join(", ", sessionControl.SessionIds));
+                        return;
+                    }
+
+                    if (sessionIds.Count < sessionControl.SessionIds.Count)
+                    {
+                        var invalidIds = sessionControl.SessionIds.Except(sessionIds.Select(g => g.ToString()));
+                        _logger.LogWarning("Некоторые SessionIds невалидны и будут пропущены для контрагента {ContractorId}: {InvalidIds}",
+                            sessionControl.ContractorId, string.Join(", ", invalidIds));
+                    }
+
+                    var sessions = await dbContext.Sessions
+                        .Where(s => s.UserAccountId == userAccount.Id && sessionIds.Contains(s.Id))
+                        .ToListAsync(cancellationToken);
+
+                    if (sessions.Count == 0)
+                    {
+                        _logger.LogWarning(
+                            "Сессии не найдены для контрагента {ContractorId}. Запрошены: {RequestedIds}",
+                            sessionControl.ContractorId,
+                            string.Join(", ", sessionIds));
+                        return;
+                    }
+
+                    if (sessions.Count < sessionIds.Count)
+                    {
+                        var foundIds = sessions.Select(s => s.Id).ToList();
+                        var notFoundIds = sessionIds.Except(foundIds);
+                        _logger.LogWarning("Не все сессии найдены для контрагента {ContractorId}. Не найдены: {NotFoundIds}",
+                            sessionControl.ContractorId, string.Join(", ", notFoundIds));
+                    }
+
+                    foreach (var session in sessions)
+                    {
+                        session.IsActive = false;
+                    }
+
+                    await dbContext.SaveChangesAsync(cancellationToken);
+                    _logger.LogInformation("Деактивировано {Count} сессий для контрагента {ContractorId} по запросу из FimBiz. Причина: {Reason}", 
+                        sessions.Count, sessionControl.ContractorId, sessionControl.Reason ?? "не указана");
+                    break;
+
+                default:
+                    _logger.LogWarning("Неизвестное действие управления сессиями: {Action} (значение: {ActionValue}) для контрагента {ContractorId}",
+                        sessionControl.Action, (int)sessionControl.Action, sessionControl.ContractorId);
                     break;
             }
         }

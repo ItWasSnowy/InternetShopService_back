@@ -12,15 +12,18 @@ namespace InternetShopService_back.Infrastructure.Grpc;
 public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncServiceBase
 {
     private readonly FimBizSessionService _fimBizSessionService;
+    private readonly SessionControlService _sessionControlService;
     private readonly ILogger<ContractorSyncGrpcService> _logger;
     private readonly IConfiguration _configuration;
 
     public ContractorSyncGrpcService(
         FimBizSessionService fimBizSessionService,
+        SessionControlService sessionControlService,
         ILogger<ContractorSyncGrpcService> logger,
         IConfiguration configuration)
     {
         _fimBizSessionService = fimBizSessionService;
+        _sessionControlService = sessionControlService;
         _logger = logger;
         _configuration = configuration;
     }
@@ -61,6 +64,60 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
         catch (Exception ex)
         {
             _logger.LogError(ex, "Ошибка при получении сессий для контрагента {ContractorId}", request.ContractorId);
+            throw new RpcException(new Status(StatusCode.Internal, "Internal server error"));
+        }
+    }
+
+    /// <summary>
+    /// Выполнить команду управления сессиями и получить результат
+    /// </summary>
+    public override async Task<ExecuteSessionControlResponse> ExecuteSessionControl(
+        ExecuteSessionControlRequest request,
+        ServerCallContext context)
+    {
+        try
+        {
+            // Проверка API ключа
+            var apiKey = context.RequestHeaders.GetValue("x-api-key");
+            var expectedApiKey = _configuration["FimBiz:ApiKey"];
+            
+            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
+            {
+                _logger.LogWarning("Неверный или отсутствующий API ключ при выполнении команды управления сессиями для контрагента {ContractorId}", 
+                    request.SessionControl?.ContractorId ?? 0);
+                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
+            }
+
+            if (request.SessionControl == null)
+            {
+                _logger.LogWarning("Получен запрос ExecuteSessionControl без SessionControl");
+                throw new RpcException(new Status(StatusCode.InvalidArgument, "SessionControl is required"));
+            }
+
+            _logger.LogInformation("Выполнение команды управления сессиями для контрагента {ContractorId} от FimBiz", 
+                request.SessionControl.ContractorId);
+
+            var response = await _sessionControlService.ExecuteSessionControlAsync(
+                request.SessionControl, 
+                context.CancellationToken);
+
+            _logger.LogInformation(
+                "Результат выполнения команды для контрагента {ContractorId}: Success={Success}, Message={Message}, DisconnectedCount={DisconnectedCount}",
+                request.SessionControl.ContractorId, 
+                response.Success, 
+                response.Message, 
+                response.DisconnectedCount);
+
+            return response;
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при выполнении команды управления сессиями для контрагента {ContractorId}", 
+                request.SessionControl?.ContractorId ?? 0);
             throw new RpcException(new Status(StatusCode.Internal, "Internal server error"));
         }
     }
