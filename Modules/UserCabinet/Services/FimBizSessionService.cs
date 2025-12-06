@@ -45,16 +45,12 @@ public class FimBizSessionService
                 return new GetActiveSessionsResponse { Sessions = { } };
             }
 
-            // Получаем все сессии контрагента (включая неактивные, чтобы FimBiz знал о всех)
-            var sessions = await _context.Sessions
-                .Include(s => s.UserAccount)
-                .Where(s => s.UserAccount.CounterpartyId == counterparty.Id)
-                .OrderByDescending(s => s.CreatedAt)
-                .ToListAsync();
+            // Получаем только активные сессии (IsActive = true и ExpiresAt > Now)
+            var sessions = await _sessionRepository.GetActiveSessionsByCounterpartyIdAsync(counterparty.Id);
 
             var sessionInfos = sessions.Select(s => MapToSessionInfo(s)).ToList();
 
-            _logger.LogInformation("Получено {Count} сессий для контрагента {ContractorId}", 
+            _logger.LogInformation("Получено {Count} активных сессий для контрагента {ContractorId}", 
                 sessionInfos.Count, fimBizContractorId);
 
             return new GetActiveSessionsResponse
@@ -82,7 +78,7 @@ public class FimBizSessionService
             IpAddress = session.IpAddress ?? string.Empty,
             CreatedAt = new DateTimeOffset(session.CreatedAt).ToUnixTimeSeconds(),
             ExpiresAt = new DateTimeOffset(session.ExpiresAt).ToUnixTimeSeconds(),
-            IsActive = session.IsActive && session.ExpiresAt > DateTime.UtcNow
+            IsActive = true  // Все сессии уже активные (отфильтрованы в репозитории)
         };
     }
 }
