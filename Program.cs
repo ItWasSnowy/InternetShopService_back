@@ -1,9 +1,12 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
+using Grpc.AspNetCore;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Calls;
 using InternetShopService_back.Infrastructure.Grpc;
@@ -21,6 +24,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllers();
+builder.Services.AddGrpc(); // Добавляем поддержку gRPC сервера
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -88,6 +92,51 @@ builder.Services.AddAuthentication(options =>
         ValidateLifetime = true,
         ClockSkew = TimeSpan.Zero
     };
+
+    // Проверка активности сессии в БД при каждом запросе
+    options.Events = new JwtBearerEvents
+    {
+        OnTokenValidated = async context =>
+        {
+            // Получаем токен из заголовка
+            var tokenString = context.Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+            if (string.IsNullOrEmpty(tokenString))
+            {
+                context.Fail("Токен не предоставлен");
+                return;
+            }
+
+            // Получаем сервисы из DI
+            var serviceProvider = context.HttpContext.RequestServices;
+            var sessionRepository = serviceProvider.GetRequiredService<ISessionRepository>();
+            var logger = serviceProvider.GetRequiredService<ILogger<Program>>();
+
+            // Проверяем активность сессии в БД
+            var session = await sessionRepository.GetByAccessTokenAsync(tokenString);
+            if (session == null)
+            {
+                logger.LogWarning("Сессия не найдена для токена");
+                context.Fail("Сессия не найдена или деактивирована");
+                return;
+            }
+
+            if (!session.IsActive)
+            {
+                logger.LogWarning("Сессия {SessionId} деактивирована", session.Id);
+                context.Fail("Сессия деактивирована");
+                return;
+            }
+
+            if (session.ExpiresAt <= DateTime.UtcNow)
+            {
+                logger.LogWarning("Сессия {SessionId} истекла", session.Id);
+                context.Fail("Сессия истекла");
+                return;
+            }
+
+            // Токен валиден, сессия активна - доступ разрешен
+        }
+    };
 });
 
 builder.Services.AddAuthorization();
@@ -126,6 +175,7 @@ switch (callProvider)
 // Business services
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
+builder.Services.AddScoped<FimBizSessionService>();
 builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<ICounterpartyService, CounterpartyService>();
 builder.Services.AddScoped<IDeliveryAddressService, DeliveryAddressService>();
@@ -155,6 +205,16 @@ if (enableAutoSync)
 {
     builder.Services.AddHostedService<FimBizSyncService>();
 }
+
+// Настройка Kestrel для поддержки HTTP/2 (требуется для gRPC)
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ConfigureEndpointDefaults(listenOptions =>
+    {
+        // Включаем поддержку HTTP/2 для gRPC
+        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+    });
+});
 
 var app = builder.Build();
 
@@ -221,6 +281,10 @@ app.UseCors("AllowAll");
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseUserContext();
+
+// Map gRPC service
+app.MapGrpcService<ContractorSyncGrpcService>();
+
 app.MapControllers();
 
 app.Run();

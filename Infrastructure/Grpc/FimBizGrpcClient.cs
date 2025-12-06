@@ -222,6 +222,16 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
         return _client.SubscribeToChanges(request, headers);
     }
 
+    public async Task<GetActiveSessionsResponse> GetActiveSessionsAsync(GetActiveSessionsRequest request)
+    {
+        // Этот метод должен быть реализован на стороне gRPC сервера
+        // FimBiz вызывает этот метод для получения списка сессий контрагента
+        // Пока возвращаем пустой ответ, так как у нас нет gRPC сервера
+        // Реальная реализация будет в gRPC сервере, который будет использовать FimBizSessionService
+        _logger.LogWarning("GetActiveSessionsAsync вызван, но gRPC сервер не реализован. Используйте FimBizSessionService напрямую.");
+        return new GetActiveSessionsResponse { Sessions = { } };
+    }
+
     private Counterparty MapToCounterparty(Contractor contractor)
     {
         // Преобразование типа контрагента

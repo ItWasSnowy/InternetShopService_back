@@ -15,5 +15,8 @@ public interface IFimBizGrpcClient
     // Методы для синхронизации
     Task<GetContractorsResponse> GetContractorsAsync(GetContractorsRequest request);
     AsyncServerStreamingCall<ContractorChange> SubscribeToChanges(SubscribeRequest request);
+    
+    // Метод для получения активных сессий контрагента
+    Task<GetActiveSessionsResponse> GetActiveSessionsAsync(GetActiveSessionsRequest request);
 }
 
