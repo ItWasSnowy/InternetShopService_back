@@ -270,8 +270,9 @@ public class AuthService : IAuthService
                 userAccount.IsFirstLogin = false;
             }
 
-            // Деактивация старых сессий (опционально, можно сделать настройку)
-            await _userAccountRepository.DeactivateSessionsAsync(userAccount.Id);
+            // ⚠️ Деактивация старых сессий отключена для поддержки множественных активных сессий с разных устройств
+            // Пользователь может деактивировать сессии вручную через API или через FimBiz
+            // await _userAccountRepository.DeactivateSessionsAsync(userAccount.Id);
 
             // Генерация токенов
             var (accessToken, refreshToken) = _jwtTokenService.GenerateTokens(
@@ -432,8 +433,9 @@ public class AuthService : IAuthService
             userAccount.FirstFailedLoginAttempt = null;
             userAccount.LastLoginAt = DateTime.UtcNow;
 
-            // Деактивация старых сессий
-            await _userAccountRepository.DeactivateSessionsAsync(userAccount.Id);
+            // ⚠️ Деактивация старых сессий отключена для поддержки множественных активных сессий с разных устройств
+            // Пользователь может деактивировать сессии вручную через API или через FimBiz
+            // await _userAccountRepository.DeactivateSessionsAsync(userAccount.Id);
 
             // Генерация токенов
             var (accessToken, refreshToken) = _jwtTokenService.GenerateTokens(
