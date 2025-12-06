@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using InternetShopService_back.Infrastructure.Jwt;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Services;
@@ -133,7 +134,9 @@ public class SessionsController : ControllerBase
 
     private Guid? GetCurrentUserId()
     {
-        var userIdClaim = User.FindFirst("userId")?.Value;
+        // Исправление: используем ClaimTypes.NameIdentifier вместо "userId"
+        // так как токен создается с ClaimTypes.NameIdentifier в JwtTokenService
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (Guid.TryParse(userIdClaim, out var userId))
         {
             return userId;
