@@ -73,10 +73,10 @@ public class SessionControlService
 
             switch (sessionControl.Action)
             {
-                case SessionAction.DeactivateAll:
+                case SessionAction.DisconnectAllSessions:
                     return await DeactivateAllSessionsAsync(userAccount.Id, sessionControl.ContractorId, cancellationToken);
 
-                case SessionAction.DeactivateById:
+                case SessionAction.DisconnectSessions:
                     return await DeactivateSessionsByIdAsync(
                         userAccount.Id, 
                         sessionControl.ContractorId, 
@@ -157,7 +157,7 @@ public class SessionControlService
         if (sessionIds == null || sessionIds.Count == 0)
         {
             response.Message = "Список SessionIds пуст";
-            _logger.LogWarning("Получена команда DeactivateById без списка SessionIds для контрагента {ContractorId}", 
+            _logger.LogWarning("Получена команда DisconnectSessions без списка SessionIds для контрагента {ContractorId}", 
                 contractorId);
             return response;
         }

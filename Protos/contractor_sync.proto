@@ -175,16 +175,16 @@ message DiscountRule {
 
 // Управление сессиями пользователей интернет-магазина
 message SessionControl {
-  int32 contractor_id = 1;
-  SessionAction action = 2;
-  repeated string session_ids = 3;  // GUID сессий для отключения (если action = DEACTIVATE_BY_ID)
-  optional string reason = 4;  // Причина деактивации
-  int64 requested_at = 5;  // Unix timestamp запроса
+  SessionAction action = 1;                  // Действие для выполнения (должно быть первым полем для совместимости с FimBiz)
+  repeated string session_ids = 2;          // Список ID сессий для отключения (пусто = все сессии)
+  int32 contractor_id = 3;                  // ID контрагента (должно быть третьим полем для совместимости с FimBiz)
+  optional string reason = 4;               // Причина деактивации
+  int64 requested_at = 5;                   // Unix timestamp запроса
 }
 
 enum SessionAction {
-  DEACTIVATE_ALL = 0;        // Отключить все сессии
-  DEACTIVATE_BY_ID = 1;      // Отключить конкретные сессии по ID
+  DISCONNECT_SESSIONS = 0;                  // Отключить указанные сессии (совпадает с FimBiz SessionControlAction.DISCONNECT_SESSIONS)
+  DISCONNECT_ALL_SESSIONS = 1;              // Отключить все сессии контрагента (совпадает с FimBiz SessionControlAction.DISCONNECT_ALL_SESSIONS)
 }
 
 // Информация о сессии для передачи в FimBiz

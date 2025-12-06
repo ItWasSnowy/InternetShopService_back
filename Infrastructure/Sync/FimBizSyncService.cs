@@ -302,7 +302,7 @@ public class FimBizSyncService : BackgroundService
 
             switch (sessionControl.Action)
             {
-                case SessionAction.DeactivateAll:
+                case SessionAction.DisconnectAllSessions:
                     // Деактивируем все активные сессии
                     var allSessions = await dbContext.Sessions
                         .Where(s => s.UserAccountId == userAccount.Id && s.IsActive && s.ExpiresAt > DateTime.UtcNow)
@@ -326,11 +326,11 @@ public class FimBizSyncService : BackgroundService
                     }
                     break;
 
-                case SessionAction.DeactivateById:
+                case SessionAction.DisconnectSessions:
                     // Деактивируем конкретные сессии по ID
                     if (sessionControl.SessionIds == null || sessionControl.SessionIds.Count == 0)
                     {
-                        _logger.LogWarning("Получена команда DeactivateById без списка SessionIds для контрагента {ContractorId}", 
+                        _logger.LogWarning("Получена команда DisconnectSessions без списка SessionIds для контрагента {ContractorId}", 
                             sessionControl.ContractorId);
                         return;
                     }
