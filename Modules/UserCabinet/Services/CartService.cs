@@ -123,6 +123,77 @@ public class CartService : ICartService
         return MapToCartDto(cart!, discounts);
     }
 
+    public async Task<CartDto> AddItemsAsync(Guid userId, List<AddCartItemDto> items)
+    {
+        if (items == null || !items.Any())
+        {
+            throw new ArgumentException("Список товаров не может быть пустым");
+        }
+
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+        {
+            throw new InvalidOperationException("Пользователь не найден");
+        }
+
+        var cart = await _cartRepository.GetByUserIdAsync(userId);
+        
+        // Создаем корзину, если её нет
+        if (cart == null)
+        {
+            cart = new Cart
+            {
+                Id = Guid.NewGuid(),
+                UserAccountId = userId,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            cart = await _cartRepository.CreateAsync(cart);
+        }
+
+        // Добавляем или обновляем товары
+        foreach (var item in items)
+        {
+            // Проверяем, есть ли уже такой товар в корзине
+            var existingItem = cart.Items.FirstOrDefault(i => i.NomenclatureId == item.NomenclatureId);
+            
+            if (existingItem != null)
+            {
+                // Увеличиваем количество
+                existingItem.Quantity += item.Quantity;
+                existingItem.Price = item.Price; // Обновляем цену на актуальную
+                existingItem.UpdatedAt = DateTime.UtcNow;
+                await _cartRepository.UpdateCartItemAsync(existingItem);
+            }
+            else
+            {
+                // Добавляем новый товар
+                var cartItem = new CartItem
+                {
+                    Id = Guid.NewGuid(),
+                    CartId = cart.Id,
+                    NomenclatureId = item.NomenclatureId,
+                    NomenclatureName = item.NomenclatureName,
+                    Quantity = item.Quantity,
+                    Price = item.Price,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                await _cartRepository.AddCartItemAsync(cartItem);
+            }
+        }
+
+        // Обновляем время изменения корзины
+        cart.UpdatedAt = DateTime.UtcNow;
+        await _cartRepository.UpdateAsync(cart);
+
+        // Получаем обновленную корзину со скидками
+        cart = await _cartRepository.GetByUserIdAsync(userId);
+        var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
+        
+        return MapToCartDto(cart!, discounts);
+    }
+
     public async Task<CartDto> UpdateItemAsync(Guid userId, Guid itemId, int quantity)
     {
         if (quantity <= 0)

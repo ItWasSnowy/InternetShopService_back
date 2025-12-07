@@ -72,6 +72,44 @@ public class CartController : ControllerBase
         }
     }
 
+    [HttpPost("add-items")]
+    public async Task<IActionResult> AddItems([FromBody] List<AddCartItemDto> items)
+    {
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        if (items == null || !items.Any())
+        {
+            return BadRequest(new { error = "Список товаров не может быть пустым" });
+        }
+
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var cart = await _cartService.AddItemsAsync(userId.Value, items);
+            return Ok(cart);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
+    }
+
     [HttpPut("{itemId}")]
     public async Task<IActionResult> UpdateItem(Guid itemId, [FromBody] UpdateCartItemDto dto)
     {
