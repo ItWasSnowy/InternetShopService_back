@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Grpc.Net.Client;
 using Grpc.Core;
 using InternetShopService_back.Infrastructure.Grpc.Contractors;
+using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Shared.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -11,7 +12,8 @@ namespace InternetShopService_back.Infrastructure.Grpc;
 public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
 {
     private readonly GrpcChannel _channel;
-    private readonly ContractorSyncService.ContractorSyncServiceClient _client;
+    private readonly ContractorSyncService.ContractorSyncServiceClient _contractorClient;
+    private readonly OrderSyncService.OrderSyncServiceClient _orderClient;
     private readonly IConfiguration _configuration;
     private readonly ILogger<FimBizGrpcClient> _logger;
     private readonly string _apiKey;
@@ -37,7 +39,8 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
             MaxSendMessageSize = 4 * 1024 * 1024
         });
 
-        _client = new ContractorSyncService.ContractorSyncServiceClient(_channel);
+        _contractorClient = new ContractorSyncService.ContractorSyncServiceClient(_channel);
+        _orderClient = new OrderSyncService.OrderSyncServiceClient(_channel);
     }
 
     public async Task<Counterparty?> GetCounterpartyAsync(string phoneNumber)
@@ -63,7 +66,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
             }
 
             var headers = CreateHeaders();
-            var response = await _client.GetContractorsAsync(request, headers);
+            var response = await _contractorClient.GetContractorsAsync(request, headers);
 
             // Ищем контрагента по номеру телефона
             // Номер может быть в формате +7XXXXXXXXXX или 7XXXXXXXXXX
@@ -118,7 +121,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
             };
 
             var headers = CreateHeaders();
-            var contractor = await _client.GetContractorAsync(request, headers);
+            var contractor = await _contractorClient.GetContractorAsync(request, headers);
 
             return MapToCounterparty(contractor);
         }
@@ -163,7 +166,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
             };
 
             var headers = CreateHeaders();
-            var fullContractor = await _client.GetContractorAsync(request, headers);
+            var fullContractor = await _contractorClient.GetContractorAsync(request, headers);
 
             // Преобразуем DiscountRules в Discount
             // Нужен counterpartyId из локальной БД, но пока используем временный GUID
@@ -203,7 +206,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
         try
         {
             var headers = CreateHeaders();
-            return await _client.GetContractorsAsync(request, headers);
+            return await _contractorClient.GetContractorsAsync(request, headers);
         }
         catch (RpcException ex)
         {
@@ -219,7 +222,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     public AsyncServerStreamingCall<ContractorChange> SubscribeToChanges(SubscribeRequest request)
     {
         var headers = CreateHeaders();
-        return _client.SubscribeToChanges(request, headers);
+        return _contractorClient.SubscribeToChanges(request, headers);
     }
 
     public async Task<GetActiveSessionsResponse> GetActiveSessionsAsync(GetActiveSessionsRequest request)
@@ -230,6 +233,66 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
         // Реальная реализация будет в gRPC сервере, который будет использовать FimBizSessionService
         _logger.LogWarning("GetActiveSessionsAsync вызван, но gRPC сервер не реализован. Используйте FimBizSessionService напрямую.");
         return new GetActiveSessionsResponse { Sessions = { } };
+    }
+
+    // Методы для работы с заказами
+
+    public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequest request)
+    {
+        try
+        {
+            var headers = CreateHeaders();
+            return await _orderClient.CreateOrderAsync(request, headers);
+        }
+        catch (RpcException ex)
+        {
+            _logger.LogError(ex, "Ошибка gRPC при создании заказа {ExternalOrderId}", request.ExternalOrderId);
+            if (ex.StatusCode == StatusCode.Unauthenticated)
+            {
+                throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");
+            }
+            throw;
+        }
+    }
+
+    public async Task<UpdateOrderStatusResponse> UpdateOrderStatusAsync(UpdateOrderStatusRequest request)
+    {
+        try
+        {
+            var headers = CreateHeaders();
+            return await _orderClient.UpdateOrderStatusAsync(request, headers);
+        }
+        catch (RpcException ex)
+        {
+            _logger.LogError(ex, "Ошибка gRPC при обновлении статуса заказа {ExternalOrderId}", request.ExternalOrderId);
+            if (ex.StatusCode == StatusCode.Unauthenticated)
+            {
+                throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");
+            }
+            throw;
+        }
+    }
+
+    public async Task<Order> GetOrderAsync(GetOrderRequest request)
+    {
+        try
+        {
+            var headers = CreateHeaders();
+            return await _orderClient.GetOrderAsync(request, headers);
+        }
+        catch (RpcException ex)
+        {
+            _logger.LogError(ex, "Ошибка gRPC при получении заказа {ExternalOrderId}", request.ExternalOrderId);
+            if (ex.StatusCode == StatusCode.Unauthenticated)
+            {
+                throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");
+            }
+            if (ex.StatusCode == StatusCode.NotFound)
+            {
+                return null!;
+            }
+            throw;
+        }
     }
 
     private Counterparty MapToCounterparty(Contractor contractor)

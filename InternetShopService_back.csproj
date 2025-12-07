@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <Protobuf Include="Protos\contractor_sync.proto" GrpcServices="Both" />
+    <Protobuf Include="Protos\order_sync.proto" GrpcServices="Client" />
   </ItemGroup>
 
 </Project>

@@ -1,4 +1,6 @@
 using InternetShopService_back.Data;
+using InternetShopService_back.Infrastructure.Grpc;
+using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Infrastructure.Notifications;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
@@ -9,6 +11,13 @@ using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Shared.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using OrderStatus = InternetShopService_back.Modules.OrderManagement.Models.OrderStatus;
+using GrpcOrder = InternetShopService_back.Infrastructure.Grpc.Orders.Order;
+using GrpcOrderStatus = InternetShopService_back.Infrastructure.Grpc.Orders.OrderStatus;
+using GrpcDeliveryType = InternetShopService_back.Infrastructure.Grpc.Orders.DeliveryType;
+using GrpcOrderItem = InternetShopService_back.Infrastructure.Grpc.Orders.OrderItem;
+using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order;
+using LocalOrderItem = InternetShopService_back.Modules.OrderManagement.Models.OrderItem;
 
 namespace InternetShopService_back.Modules.OrderManagement.Services;
 
@@ -19,6 +28,8 @@ public class OrderService : IOrderService
     private readonly ICounterpartyRepository _counterpartyRepository;
     private readonly IDeliveryAddressRepository _deliveryAddressRepository;
     private readonly ICargoReceiverRepository _cargoReceiverRepository;
+    private readonly IShopRepository _shopRepository;
+    private readonly IFimBizGrpcClient _fimBizGrpcClient;
     private readonly IEmailService _emailService;
     private readonly ApplicationDbContext _context;
     private readonly ILogger<OrderService> _logger;
@@ -29,6 +40,8 @@ public class OrderService : IOrderService
         ICounterpartyRepository counterpartyRepository,
         IDeliveryAddressRepository deliveryAddressRepository,
         ICargoReceiverRepository cargoReceiverRepository,
+        IShopRepository shopRepository,
+        IFimBizGrpcClient fimBizGrpcClient,
         IEmailService emailService,
         ApplicationDbContext context,
         ILogger<OrderService> logger)
@@ -38,6 +51,8 @@ public class OrderService : IOrderService
         _counterpartyRepository = counterpartyRepository;
         _deliveryAddressRepository = deliveryAddressRepository;
         _cargoReceiverRepository = cargoReceiverRepository;
+        _shopRepository = shopRepository;
+        _fimBizGrpcClient = fimBizGrpcClient;
         _emailService = emailService;
         _context = context;
         _logger = logger;
@@ -79,7 +94,7 @@ public class OrderService : IOrderService
         var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
 
         // Создаем заказ
-        var order = new Order
+        var order = new LocalOrder
         {
             Id = Guid.NewGuid(),
             UserAccountId = userId,
@@ -102,7 +117,7 @@ public class OrderService : IOrderService
             var priceWithDiscount = itemDto.Price * (1 - discountPercent / 100);
             var itemTotalAmount = priceWithDiscount * itemDto.Quantity;
 
-            var orderItem = new OrderItem
+            var orderItem = new LocalOrderItem
             {
                 Id = Guid.NewGuid(),
                 OrderId = order.Id,
@@ -134,6 +149,17 @@ public class OrderService : IOrderService
         order = await _orderRepository.CreateAsync(order);
 
         _logger.LogInformation("Создан заказ {OrderId} для пользователя {UserId}", order.Id, userId);
+
+        // Отправляем заказ в FimBiz
+        try
+        {
+            await SendOrderToFimBizAsync(order, userAccount);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при отправке заказа {OrderId} в FimBiz. Заказ сохранен локально, но не синхронизирован", order.Id);
+            // Не прерываем выполнение, заказ уже сохранен локально
+        }
 
         return await MapToOrderDtoAsync(order);
     }
@@ -191,7 +217,7 @@ public class OrderService : IOrderService
         return await MapToOrderDtoAsync(order);
     }
 
-    private async Task SendOrderStatusNotificationAsync(Order order)
+    private async Task SendOrderStatusNotificationAsync(LocalOrder order)
     {
         try
         {
@@ -232,7 +258,7 @@ public class OrderService : IOrderService
                status == OrderStatus.InvoiceConfirmed;
     }
 
-    private async Task<OrderDto> MapToOrderDtoAsync(Order order)
+    private async Task<OrderDto> MapToOrderDtoAsync(LocalOrder order)
     {
         var dto = new OrderDto
         {
@@ -331,5 +357,105 @@ public class OrderService : IOrderService
 
         // TODO: Получить группу номенклатуры и найти скидку на группу
         return null;
+    }
+
+    private async Task SendOrderToFimBizAsync(LocalOrder order, InternetShopService_back.Modules.UserCabinet.Models.UserAccount userAccount)
+    {
+        // Получаем контрагента для FimBizContractorId
+        var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
+        if (counterparty == null || !counterparty.FimBizContractorId.HasValue)
+        {
+            _logger.LogWarning("Не удалось отправить заказ {OrderId} в FimBiz: контрагент не имеет FimBizContractorId", order.Id);
+            return;
+        }
+
+        // Получаем магазин для company_id
+        var shop = await _shopRepository.GetByIdAsync(userAccount.ShopId);
+        if (shop == null)
+        {
+            _logger.LogWarning("Не удалось отправить заказ {OrderId} в FimBiz: магазин не найден для пользователя", order.Id);
+            return;
+        }
+
+        // Формируем адрес доставки
+        string deliveryAddress = string.Empty;
+        if (order.DeliveryAddressId.HasValue)
+        {
+            var address = await _deliveryAddressRepository.GetByIdAsync(order.DeliveryAddressId.Value);
+            if (address != null)
+            {
+                var addressParts = new List<string>();
+                if (!string.IsNullOrEmpty(address.Region)) addressParts.Add(address.Region);
+                if (!string.IsNullOrEmpty(address.City)) addressParts.Add(address.City);
+                addressParts.Add(address.Address);
+                if (!string.IsNullOrEmpty(address.Apartment)) addressParts.Add($"кв. {address.Apartment}");
+                if (!string.IsNullOrEmpty(address.PostalCode)) addressParts.Add($"индекс: {address.PostalCode}");
+                deliveryAddress = string.Join(", ", addressParts);
+            }
+        }
+
+        // Преобразуем DeliveryType из нашей модели в gRPC
+        var deliveryType = order.DeliveryType switch
+        {
+            Models.DeliveryType.Pickup => GrpcDeliveryType.SelfPickup,
+            Models.DeliveryType.SellerDelivery => GrpcDeliveryType.CompanyDelivery,
+            Models.DeliveryType.Carrier => GrpcDeliveryType.TransportCompany,
+            _ => GrpcDeliveryType.SelfPickup // По умолчанию самовывоз
+        };
+
+        // Создаем запрос для FimBiz
+        var createOrderRequest = new CreateOrderRequest
+        {
+            CompanyId = shop.FimBizCompanyId,
+            ExternalOrderId = order.Id.ToString(),
+            ContractorId = counterparty.FimBizContractorId.Value,
+            DeliveryAddress = deliveryAddress,
+            DeliveryType = deliveryType
+        };
+
+        if (shop.FimBizOrganizationId.HasValue)
+        {
+            createOrderRequest.OrganizationId = shop.FimBizOrganizationId.Value;
+        }
+
+        // Добавляем позиции заказа
+        foreach (var item in order.Items)
+        {
+            createOrderRequest.Items.Add(new GrpcOrderItem
+            {
+                Name = item.NomenclatureName,
+                Quantity = item.Quantity,
+                Price = (long)(item.Price * 100), // Цена в копейках
+                IsAvailable = true, // TODO: получить из FimBiz
+                RequiresManufacturing = false // TODO: определить по наличию
+            });
+        }
+
+        // Отправляем в FimBiz
+        var response = await _fimBizGrpcClient.CreateOrderAsync(createOrderRequest);
+
+        if (response.Success && response.Order != null)
+        {
+            // Обновляем заказ с FimBizOrderId
+            order.FimBizOrderId = response.Order.OrderId;
+            order.OrderNumber = response.Order.OrderNumber;
+            order.SyncedWithFimBizAt = DateTime.UtcNow;
+            
+            // Если вернули трек-номер, сохраняем
+            if (!string.IsNullOrEmpty(response.Order.TrackingNumber))
+            {
+                order.TrackingNumber = response.Order.TrackingNumber;
+            }
+
+            await _orderRepository.UpdateAsync(order);
+            
+            _logger.LogInformation("Заказ {OrderId} успешно отправлен в FimBiz. FimBizOrderId: {FimBizOrderId}", 
+                order.Id, order.FimBizOrderId);
+        }
+        else
+        {
+            _logger.LogWarning("Не удалось создать заказ {OrderId} в FimBiz: {Message}", 
+                order.Id, response.Message);
+        }
     }
 }

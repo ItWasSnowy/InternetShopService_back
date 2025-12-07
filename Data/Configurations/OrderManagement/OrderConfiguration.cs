@@ -28,6 +28,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.HasIndex(x => x.UserAccountId);
         builder.HasIndex(x => x.Status);
         builder.HasIndex(x => x.CreatedAt);
+        builder.HasIndex(x => x.FimBizOrderId);
 
         builder.HasOne(x => x.UserAccount)
             .WithMany()

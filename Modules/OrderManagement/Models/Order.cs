@@ -22,6 +22,8 @@ public class Order
     public Guid? UpdDocumentId { get; set; }
     public Guid? AssemblerId { get; set; } // ID сборщика
     public Guid? DriverId { get; set; } // ID водителя/экспедитора
+    public int? FimBizOrderId { get; set; } // ID заказа в FimBiz
+    public DateTime? SyncedWithFimBizAt { get; set; } // Время последней синхронизации с FimBiz
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime? AssembledAt { get; set; }

@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+option csharp_namespace = "InternetShopService_back.Infrastructure.Grpc.Orders";
+
+package orders;
+
+// Сервис синхронизации заказов
+service OrderSyncService {
+  // Создать заказ из интернет-магазина
+  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
+  
+  // Обновить статус заказа (интернет-магазин может обновлять статус оплаты)
+  rpc UpdateOrderStatus (UpdateOrderStatusRequest) returns (UpdateOrderStatusResponse);
+  
+  // Получить информацию о заказе
+  rpc GetOrder (GetOrderRequest) returns (Order);
+}
+
+// Запрос создания заказа
+message CreateOrderRequest {
+  int32 company_id = 1;                  // ID компании в FimBiz
+  string external_order_id = 2;          // ID заказа в интернет-магазине
+  int32 contractor_id = 3;               // ID контрагента
+  string delivery_address = 4;           // Адрес доставки
+  DeliveryType delivery_type = 5;        // Тип доставки
+  repeated OrderItem items = 6;          // Позиции заказа
+  optional string comment = 7;           // Комментарий
+  optional int32 organization_id = 8;    // ID организации (опционально)
+  map<string, string> metadata = 9;      // Дополнительные метаданные
+}
+
+// Ответ на создание заказа
+message CreateOrderResponse {
+  bool success = 1;
+  string message = 2;
+  Order order = 3;
+  optional BillInfo bill_info = 4;       // Информация о созданном счете
+}
+
+// Запрос обновления статуса заказа
+message UpdateOrderStatusRequest {
+  string external_order_id = 1;          // ID заказа в интернет-магазине
+  OrderStatus new_status = 2;            // Новый статус
+  optional string comment = 3;           // Комментарий к изменению
+}
+
+// Ответ на обновление статуса
+message UpdateOrderStatusResponse {
+  bool success = 1;
+  string message = 2;
+  Order order = 3;
+}
+
+// Запрос получения заказа
+message GetOrderRequest {
+  string external_order_id = 1;          // ID заказа в интернет-магазине
+  int32 company_id = 2;                  // ID компании в FimBiz
+}
+
+// Заказ
+message Order {
+  int32 order_id = 1;                    // ID заказа в FimBiz
+  string external_order_id = 2;          // ID заказа в интернет-магазине
+  string order_number = 3;               // Номер заказа (сквозная нумерация)
+  int32 contractor_id = 4;
+  OrderStatus status = 5;
+  string delivery_address = 6;
+  DeliveryType delivery_type = 7;
+  int64 total_price = 8;                 // В копейках
+  optional int64 modified_price = 9;     // Измененная стоимость
+  optional string tracking_number = 10;  // Трек-номер
+  repeated OrderItem items = 11;
+  optional BillInfo bill_info = 12;
+  optional TransferDocumentInfo upd_info = 13;
+  int64 created_at = 14;                 // Unix timestamp
+  int64 status_changed_at = 15;
+}
+
+// Позиция заказа
+message OrderItem {
+  optional int32 nomenclature_id = 1;    // ID номенклатуры (если есть)
+  string name = 2;                       // Наименование
+  int32 quantity = 3;                    // Количество
+  int64 price = 4;                       // Цена в копейках
+  bool is_available = 5;                 // Есть ли в наличии
+  bool requires_manufacturing = 6;       // Требует изготовления
+}
+
+// Информация о счете
+message BillInfo {
+  int32 bill_id = 1;
+  string bill_number = 2;
+  string pdf_url = 3;
+  BillStatus status = 4;
+  int64 created_at = 5;
+}
+
+// Информация об УПД
+message TransferDocumentInfo {
+  int32 upd_id = 1;
+  string upd_number = 2;
+  string pdf_url = 3;
+  int64 created_at = 4;
+}
+
+// Статус заказа
+enum OrderStatus {
+  ORDER_STATUS_UNKNOWN = 0;   // Неизвестный статус (по умолчанию должен быть 0)
+  PROCESSING = 1;
+  WAITING_FOR_PAYMENT = 2;
+  BILL_CONFIRMED = 3;
+  MANUFACTURING = 4;
+  PICKING = 5;
+  TRANSFERRED_TO_TRANSPORT = 6;
+  DELIVERING_BY_TRANSPORT = 7;
+  DELIVERING = 8;
+  AWAITING_PICKUP = 9;
+  COMPLETED = 10;
+}
+
+// Тип доставки
+enum DeliveryType {
+  DELIVERY_TYPE_UNKNOWN = 0;  // Неизвестный тип (по умолчанию должен быть 0)
+  SELF_PICKUP = 1;
+  COMPANY_DELIVERY = 2;
+  TRANSPORT_COMPANY = 3;
+}
+
+// Статус счета
+enum BillStatus {
+  CREATED = 0;
+  PAID = 1;
+  CONFIRMED = 2;
+  CANCELLED = 3;
+}
+
