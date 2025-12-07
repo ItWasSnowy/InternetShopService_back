@@ -233,6 +233,13 @@ public class FimBizSyncService : BackgroundService
 
             var contractor = change.Contractor;
             
+            // Если контрагент отсутствует, выходим
+            if (contractor == null)
+            {
+                _logger.LogWarning("Получено изменение контрагента без данных контрагента. ChangeType={ChangeType}", change.ChangeType);
+                return;
+            }
+            
             // Если флаг is_create_cabinet = false, не синхронизируем контрагента (если его еще нет в БД)
             // Если контрагент уже есть, обновляем его и деактивируем кабинет
             if (!contractor.IsCreateCabinet && change.ChangeType == ContractorChangeType.Created)
