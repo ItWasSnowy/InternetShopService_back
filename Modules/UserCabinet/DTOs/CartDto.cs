@@ -16,6 +16,9 @@ public class CartItemDto
     public string NomenclatureName { get; set; } = string.Empty;
     public int Quantity { get; set; }
     public decimal Price { get; set; }
+    public string? UnitType { get; set; }
+    public string? Sku { get; set; }
+    public List<string> UrlPhotos { get; set; } = new();
     public decimal DiscountPercent { get; set; }
     public decimal PriceWithDiscount { get; set; }
     public decimal TotalAmount { get; set; }
@@ -35,5 +38,13 @@ public class AddCartItemDto
     
     [Range(0, double.MaxValue, ErrorMessage = "Цена не может быть отрицательной")]
     public decimal Price { get; set; }
+    
+    [StringLength(50, ErrorMessage = "Единица измерения не должна превышать 50 символов")]
+    public string? UnitType { get; set; }
+    
+    [StringLength(100, ErrorMessage = "Артикул не должен превышать 100 символов")]
+    public string? Sku { get; set; }
+    
+    public List<string>? UrlPhotos { get; set; }
 }
 

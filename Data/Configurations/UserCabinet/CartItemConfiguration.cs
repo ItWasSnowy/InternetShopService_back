@@ -19,6 +19,15 @@ public class CartItemConfiguration : IEntityTypeConfiguration<CartItem>
         builder.Property(x => x.Price)
             .HasPrecision(18, 2);
 
+        builder.Property(x => x.UnitType)
+            .HasMaxLength(50);
+
+        builder.Property(x => x.Sku)
+            .HasMaxLength(100);
+
+        builder.Property(x => x.UrlPhotosJson)
+            .HasMaxLength(2000); // JSON строка с массивом URL
+
         builder.HasOne(x => x.Cart)
             .WithMany(x => x.Items)
             .HasForeignKey(x => x.CartId)

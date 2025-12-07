@@ -1,3 +1,4 @@
+using System.Text.Json;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Services;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
@@ -92,6 +93,9 @@ public class CartService : ICartService
             // Увеличиваем количество
             existingItem.Quantity += item.Quantity;
             existingItem.Price = item.Price; // Обновляем цену на актуальную
+            existingItem.UnitType = item.UnitType ?? existingItem.UnitType;
+            existingItem.Sku = item.Sku ?? existingItem.Sku;
+            existingItem.UrlPhotosJson = SerializeUrlPhotos(item.UrlPhotos) ?? existingItem.UrlPhotosJson;
             existingItem.UpdatedAt = DateTime.UtcNow;
             await _cartRepository.UpdateCartItemAsync(existingItem);
         }
@@ -106,6 +110,9 @@ public class CartService : ICartService
                 NomenclatureName = item.NomenclatureName,
                 Quantity = item.Quantity,
                 Price = item.Price,
+                UnitType = item.UnitType,
+                Sku = item.Sku,
+                UrlPhotosJson = SerializeUrlPhotos(item.UrlPhotos),
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -162,6 +169,9 @@ public class CartService : ICartService
                 // Увеличиваем количество
                 existingItem.Quantity += item.Quantity;
                 existingItem.Price = item.Price; // Обновляем цену на актуальную
+                existingItem.UnitType = item.UnitType ?? existingItem.UnitType;
+                existingItem.Sku = item.Sku ?? existingItem.Sku;
+                existingItem.UrlPhotosJson = SerializeUrlPhotos(item.UrlPhotos) ?? existingItem.UrlPhotosJson;
                 existingItem.UpdatedAt = DateTime.UtcNow;
                 await _cartRepository.UpdateCartItemAsync(existingItem);
             }
@@ -176,6 +186,9 @@ public class CartService : ICartService
                     NomenclatureName = item.NomenclatureName,
                     Quantity = item.Quantity,
                     Price = item.Price,
+                    UnitType = item.UnitType,
+                    Sku = item.Sku,
+                    UrlPhotosJson = SerializeUrlPhotos(item.UrlPhotos),
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
@@ -297,6 +310,9 @@ public class CartService : ICartService
                 NomenclatureName = item.NomenclatureName,
                 Quantity = item.Quantity,
                 Price = item.Price,
+                UnitType = item.UnitType,
+                Sku = item.Sku,
+                UrlPhotos = DeserializeUrlPhotos(item.UrlPhotosJson),
                 DiscountPercent = discountPercent,
                 PriceWithDiscount = priceWithDiscount,
                 TotalAmount = totalAmount
@@ -330,6 +346,41 @@ public class CartService : ICartService
         
         // TODO: Получить группу номенклатуры и найти скидку на группу
         return null;
+    }
+
+    private string? SerializeUrlPhotos(List<string>? urlPhotos)
+    {
+        if (urlPhotos == null || !urlPhotos.Any())
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Serialize(urlPhotos);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private List<string> DeserializeUrlPhotos(string? urlPhotosJson)
+    {
+        if (string.IsNullOrWhiteSpace(urlPhotosJson))
+        {
+            return new List<string>();
+        }
+
+        try
+        {
+            var result = JsonSerializer.Deserialize<List<string>>(urlPhotosJson);
+            return result ?? new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
+        }
     }
 
     public async Task<OrderDto> CreateOrderFromCartAsync(Guid userId, CreateOrderFromCartDto dto)

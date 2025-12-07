@@ -8,6 +8,9 @@ public class CartItem
     public string NomenclatureName { get; set; } = string.Empty;
     public int Quantity { get; set; }
     public decimal Price { get; set; }
+    public string? UnitType { get; set; } // Единица измерения (шт, кг, л и т.д.)
+    public string? Sku { get; set; } // Артикул
+    public string? UrlPhotosJson { get; set; } // JSON массив URL фотографий
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
