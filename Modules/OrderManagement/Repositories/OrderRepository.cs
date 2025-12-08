@@ -86,5 +86,17 @@ public class OrderRepository : IOrderRepository
 
         return $"ORD-{year}-{month:D2}-{nextNumber:D4}";
     }
+
+    public async Task<List<Order>> GetUnsyncedOrdersAsync(int limit = 100)
+    {
+        return await _context.Orders
+            .Include(o => o.Items)
+            .Include(o => o.UserAccount)
+            .ThenInclude(u => u.Counterparty)
+            .Where(o => o.FimBizOrderId == null || o.SyncedWithFimBizAt == null)
+            .OrderBy(o => o.CreatedAt) // Старые заказы в первую очередь
+            .Take(limit)
+            .ToListAsync();
+    }
 }
 

@@ -9,5 +9,8 @@ public interface IOrderRepository
     Task<Order> CreateAsync(Order order);
     Task<Order> UpdateAsync(Order order);
     Task<string> GenerateOrderNumberAsync();
+    
+    // Метод для получения неотправленных заказов
+    Task<List<Order>> GetUnsyncedOrdersAsync(int limit = 100);
 }
 

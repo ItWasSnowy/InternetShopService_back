@@ -1,0 +1,309 @@
+using InternetShopService_back.Data;
+using InternetShopService_back.Infrastructure.Grpc;
+using InternetShopService_back.Infrastructure.Grpc.Orders;
+using InternetShopService_back.Modules.OrderManagement.Models;
+using InternetShopService_back.Modules.OrderManagement.Repositories;
+using InternetShopService_back.Modules.UserCabinet.Repositories;
+using InternetShopService_back.Shared.Repositories;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Grpc.Core;
+using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order;
+using LocalDeliveryType = InternetShopService_back.Modules.OrderManagement.Models.DeliveryType;
+using GrpcDeliveryType = InternetShopService_back.Infrastructure.Grpc.Orders.DeliveryType;
+using GrpcOrderItem = InternetShopService_back.Infrastructure.Grpc.Orders.OrderItem;
+
+namespace InternetShopService_back.Infrastructure.Sync;
+
+/// <summary>
+/// Фоновая служба для периодической синхронизации неотправленных заказов с FimBiz
+/// </summary>
+public class OrderSyncService : BackgroundService
+{
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<OrderSyncService> _logger;
+    private readonly IConfiguration _configuration;
+
+    public OrderSyncService(
+        IServiceProvider serviceProvider,
+        ILogger<OrderSyncService> logger,
+        IConfiguration configuration)
+    {
+        _serviceProvider = serviceProvider;
+        _logger = logger;
+        _configuration = configuration;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        // Проверяем, включена ли автоматическая синхронизация заказов
+        var enableAutoSync = _configuration.GetValue<bool>("FimBiz:EnableAutoSync", true);
+        if (!enableAutoSync)
+        {
+            _logger.LogInformation("Автоматическая синхронизация заказов с FimBiz отключена");
+            return;
+        }
+
+        var syncIntervalMinutes = _configuration.GetValue<int>("FimBiz:OrderSyncIntervalMinutes", 5);
+        _logger.LogInformation("Служба синхронизации заказов запущена. Интервал проверки: {IntervalMinutes} минут", syncIntervalMinutes);
+
+        // Небольшая задержка перед первым запуском, чтобы приложение полностью запустилось
+        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await SyncUnsyncedOrdersAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при синхронизации заказов");
+            }
+
+            // Ждем до следующей проверки
+            await Task.Delay(TimeSpan.FromMinutes(syncIntervalMinutes), stoppingToken);
+        }
+    }
+
+    private async Task SyncUnsyncedOrdersAsync(CancellationToken cancellationToken)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var orderRepository = scope.ServiceProvider.GetRequiredService<IOrderRepository>();
+        var userAccountRepository = scope.ServiceProvider.GetRequiredService<IUserAccountRepository>();
+        var counterpartyRepository = scope.ServiceProvider.GetRequiredService<ICounterpartyRepository>();
+        var shopRepository = scope.ServiceProvider.GetRequiredService<IShopRepository>();
+        var deliveryAddressRepository = scope.ServiceProvider.GetRequiredService<IDeliveryAddressRepository>();
+        var fimBizGrpcClient = scope.ServiceProvider.GetRequiredService<IFimBizGrpcClient>();
+        var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+        try
+        {
+            // Получаем неотправленные заказы (по умолчанию до 100 штук за раз)
+            var batchSize = _configuration.GetValue<int>("FimBiz:OrderSyncBatchSize", 100);
+            var unsyncedOrders = await orderRepository.GetUnsyncedOrdersAsync(batchSize);
+
+            if (!unsyncedOrders.Any())
+            {
+                _logger.LogDebug("Нет неотправленных заказов для синхронизации");
+                return;
+            }
+
+            _logger.LogInformation("Найдено {Count} неотправленных заказов. Начинаю синхронизацию...", unsyncedOrders.Count);
+
+            int successCount = 0;
+            int errorCount = 0;
+
+            foreach (var order in unsyncedOrders)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                try
+                {
+                    // Получаем UserAccount для заказа
+                    var userAccount = await userAccountRepository.GetByIdAsync(order.UserAccountId);
+                    if (userAccount == null)
+                    {
+                        _logger.LogWarning("Не найден UserAccount для заказа {OrderId}", order.Id);
+                        errorCount++;
+                        continue;
+                    }
+
+                    // Отправляем заказ в FimBiz
+                    var sent = await SendOrderToFimBizAsync(
+                        order,
+                        userAccount,
+                        orderRepository,
+                        counterpartyRepository,
+                        shopRepository,
+                        deliveryAddressRepository,
+                        fimBizGrpcClient,
+                        dbContext);
+
+                    if (sent)
+                    {
+                        successCount++;
+                        _logger.LogInformation("Заказ {OrderId} успешно отправлен в FimBiz", order.Id);
+                    }
+                    else
+                    {
+                        errorCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errorCount++;
+                    _logger.LogError(ex, "Ошибка при отправке заказа {OrderId} в FimBiz", order.Id);
+                }
+            }
+
+            _logger.LogInformation(
+                "Синхронизация заказов завершена. Успешно: {SuccessCount}, Ошибок: {ErrorCount}",
+                successCount, errorCount);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при получении списка неотправленных заказов");
+        }
+    }
+
+    private async Task<bool> SendOrderToFimBizAsync(
+        LocalOrder order,
+        InternetShopService_back.Modules.UserCabinet.Models.UserAccount userAccount,
+        IOrderRepository orderRepository,
+        ICounterpartyRepository counterpartyRepository,
+        IShopRepository shopRepository,
+        IDeliveryAddressRepository deliveryAddressRepository,
+        IFimBizGrpcClient fimBizGrpcClient,
+        ApplicationDbContext context)
+    {
+        try
+        {
+            // Убеждаемся, что Items загружены
+            if (order.Items == null || !order.Items.Any())
+            {
+                await context.Entry(order).Collection(o => o.Items).LoadAsync();
+                
+                if (order.Items == null || !order.Items.Any())
+                {
+                    _logger.LogWarning("Заказ {OrderId} не содержит Items", order.Id);
+                    return false;
+                }
+            }
+
+            // Получаем контрагента
+            var counterparty = await counterpartyRepository.GetByIdAsync(order.CounterpartyId);
+            if (counterparty == null || !counterparty.FimBizContractorId.HasValue || counterparty.FimBizContractorId.Value <= 0)
+            {
+                _logger.LogWarning("Не удалось отправить заказ {OrderId}: контрагент не имеет FimBizContractorId", order.Id);
+                return false;
+            }
+
+            // Получаем магазин
+            var shop = await shopRepository.GetByIdAsync(userAccount.ShopId);
+            if (shop == null || shop.FimBizCompanyId <= 0)
+            {
+                _logger.LogWarning("Не удалось отправить заказ {OrderId}: магазин не найден или неверный FimBizCompanyId", order.Id);
+                return false;
+            }
+
+            // Формируем адрес доставки
+            string deliveryAddress = string.Empty;
+            if (order.DeliveryAddressId.HasValue)
+            {
+                var address = await deliveryAddressRepository.GetByIdAsync(order.DeliveryAddressId.Value);
+                if (address != null)
+                {
+                    var addressParts = new List<string>();
+                    if (!string.IsNullOrEmpty(address.Region)) addressParts.Add(address.Region);
+                    if (!string.IsNullOrEmpty(address.City)) addressParts.Add(address.City);
+                    addressParts.Add(address.Address);
+                    if (!string.IsNullOrEmpty(address.Apartment)) addressParts.Add($"кв. {address.Apartment}");
+                    if (!string.IsNullOrEmpty(address.PostalCode)) addressParts.Add($"индекс: {address.PostalCode}");
+                    deliveryAddress = string.Join(", ", addressParts);
+                }
+            }
+
+            if (string.IsNullOrEmpty(deliveryAddress) && order.DeliveryType == LocalDeliveryType.Pickup)
+            {
+                deliveryAddress = "Самовывоз";
+            }
+
+            // Преобразуем DeliveryType из нашей модели в gRPC
+            var deliveryType = order.DeliveryType switch
+            {
+                LocalDeliveryType.Pickup => GrpcDeliveryType.SelfPickup,
+                LocalDeliveryType.SellerDelivery => GrpcDeliveryType.CompanyDelivery,
+                LocalDeliveryType.Carrier => GrpcDeliveryType.TransportCompany,
+                _ => (GrpcDeliveryType)0 // DeliveryTypeUnspecified = 0
+            };
+
+            // Создаем запрос для FimBiz
+            var createOrderRequest = new CreateOrderRequest
+            {
+                CompanyId = shop.FimBizCompanyId,
+                ExternalOrderId = order.Id.ToString(),
+                ContractorId = counterparty.FimBizContractorId.Value,
+                DeliveryAddress = deliveryAddress,
+                DeliveryType = deliveryType
+            };
+
+            if (shop.FimBizOrganizationId.HasValue && shop.FimBizOrganizationId.Value > 0)
+            {
+                createOrderRequest.OrganizationId = shop.FimBizOrganizationId.Value;
+            }
+
+            // Добавляем позиции заказа
+            foreach (var item in order.Items)
+            {
+                var grpcItem = new GrpcOrderItem
+                {
+                    Name = item.NomenclatureName,
+                    Quantity = item.Quantity,
+                    Price = (long)(item.Price * 100), // Цена в копейках
+                    IsAvailable = true,
+                    RequiresManufacturing = false
+                };
+
+                if (item.NomenclatureId != Guid.Empty)
+                {
+                    var bytes = item.NomenclatureId.ToByteArray();
+                    grpcItem.NomenclatureId = BitConverter.ToInt32(bytes, 0);
+                }
+
+                createOrderRequest.Items.Add(grpcItem);
+            }
+
+            _logger.LogInformation(
+                "Отправка заказа {OrderId} в FimBiz. CompanyId: {CompanyId}, ContractorId: {ContractorId}, ItemsCount: {ItemsCount}",
+                order.Id, shop.FimBizCompanyId, counterparty.FimBizContractorId.Value, order.Items.Count);
+
+            // Отправляем в FimBiz
+            var response = await fimBizGrpcClient.CreateOrderAsync(createOrderRequest);
+
+            if (response.Success && response.Order != null)
+            {
+                // Обновляем заказ с FimBizOrderId
+                order.FimBizOrderId = response.Order.OrderId;
+                order.OrderNumber = response.Order.OrderNumber;
+                order.SyncedWithFimBizAt = DateTime.UtcNow;
+
+                if (!string.IsNullOrEmpty(response.Order.TrackingNumber))
+                {
+                    order.TrackingNumber = response.Order.TrackingNumber;
+                }
+
+                await orderRepository.UpdateAsync(order);
+
+                _logger.LogInformation(
+                    "Заказ {OrderId} успешно отправлен в FimBiz. FimBizOrderId: {FimBizOrderId}, OrderNumber: {OrderNumber}",
+                    order.Id, order.FimBizOrderId, order.OrderNumber);
+
+                return true;
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Не удалось создать заказ {OrderId} в FimBiz: {Message}",
+                    order.Id, response.Message ?? "Неизвестная ошибка");
+                return false;
+            }
+        }
+        catch (RpcException ex)
+        {
+            _logger.LogError(ex,
+                "Ошибка gRPC при отправке заказа {OrderId} в FimBiz. StatusCode: {StatusCode}, Detail: {Detail}",
+                order.Id, ex.StatusCode, ex.Status.Detail);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Неожиданная ошибка при отправке заказа {OrderId} в FimBiz", order.Id);
+            return false;
+        }
+    }
+}
+

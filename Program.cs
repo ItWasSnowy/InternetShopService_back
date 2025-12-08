@@ -14,6 +14,7 @@ using InternetShopService_back.Infrastructure.Jwt;
 using InternetShopService_back.Infrastructure.Notifications;
 using InternetShopService_back.Middleware;
 using InternetShopService_back.Infrastructure.Sync;
+using OrderSyncService = InternetShopService_back.Infrastructure.Sync.OrderSyncService;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Services;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
@@ -205,6 +206,7 @@ var enableAutoSync = builder.Configuration.GetValue<bool>("FimBiz:EnableAutoSync
 if (enableAutoSync)
 {
     builder.Services.AddHostedService<FimBizSyncService>();
+    builder.Services.AddHostedService<OrderSyncService>();
 }
 
 // Настройка Kestrel для поддержки HTTP/2 (требуется для gRPC)
