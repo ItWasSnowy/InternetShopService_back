@@ -10,82 +10,85 @@ namespace InternetShopService_back.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Добавляем FimBizOrderId, если его нет
+            // Используем SQL с проверками для безопасного добавления колонок
+            // Это позволяет применять миграцию даже если некоторые колонки уже существуют
+            
+            // 1. Добавляем FimBizOrderId
             migrationBuilder.Sql(@"
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'Orders' AND column_name = 'FimBizOrderId'
-                    ) THEN
-                        ALTER TABLE ""Orders"" ADD COLUMN ""FimBizOrderId"" integer NULL;
-                    END IF;
-                END $$;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'FimBizOrderId'
+                ) THEN
+                    ALTER TABLE ""Orders"" ADD COLUMN ""FimBizOrderId"" integer NULL;
+                END IF;
             ");
 
-            // Добавляем SyncedWithFimBizAt, если его нет
+            // 2. Добавляем SyncedWithFimBizAt
             migrationBuilder.Sql(@"
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'Orders' AND column_name = 'SyncedWithFimBizAt'
-                    ) THEN
-                        ALTER TABLE ""Orders"" ADD COLUMN ""SyncedWithFimBizAt"" timestamp with time zone NULL;
-                    END IF;
-                END $$;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'SyncedWithFimBizAt'
+                ) THEN
+                    ALTER TABLE ""Orders"" ADD COLUMN ""SyncedWithFimBizAt"" timestamp with time zone NULL;
+                END IF;
             ");
 
-            // Создаем индекс для FimBizOrderId, если его нет
+            // 3. Удаляем старую колонку CarrierId (если существует)
             migrationBuilder.Sql(@"
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_indexes 
-                        WHERE tablename = 'Orders' AND indexname = 'IX_Orders_FimBizOrderId'
-                    ) THEN
-                        CREATE INDEX ""IX_Orders_FimBizOrderId"" ON ""Orders"" (""FimBizOrderId"");
-                    END IF;
-                END $$;
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'CarrierId'
+                ) THEN
+                    ALTER TABLE ""Orders"" DROP COLUMN ""CarrierId"";
+                END IF;
             ");
 
-            // Удаляем старую колонку CarrierId, если она существует
+            // 4. Добавляем новую колонку Carrier
             migrationBuilder.Sql(@"
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'Orders' AND column_name = 'CarrierId'
-                    ) THEN
-                        ALTER TABLE ""Orders"" DROP COLUMN ""CarrierId"";
-                    END IF;
-                END $$;
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'Carrier'
+                ) THEN
+                    ALTER TABLE ""Orders"" ADD COLUMN ""Carrier"" character varying(500) NULL;
+                END IF;
             ");
 
-            // Добавляем новую колонку Carrier, если ее нет
+            // 5. Создаем индекс для FimBizOrderId (если его нет)
             migrationBuilder.Sql(@"
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'Orders' AND column_name = 'Carrier'
-                    ) THEN
-                        ALTER TABLE ""Orders"" ADD COLUMN ""Carrier"" character varying(500) NULL;
-                    END IF;
-                END $$;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_indexes 
+                    WHERE schemaname = 'public' AND tablename = 'Orders' AND indexname = 'IX_Orders_FimBizOrderId'
+                ) THEN
+                    CREATE INDEX ""IX_Orders_FimBizOrderId"" ON ""Orders"" (""FimBizOrderId"");
+                END IF;
             ");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // Откат: удаляем Carrier и возвращаем CarrierId
+            // Откат миграции
+            
+            // Удаляем индекс
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM pg_indexes 
+                        WHERE schemaname = 'public' AND tablename = 'Orders' AND indexname = 'IX_Orders_FimBizOrderId'
+                    ) THEN
+                        DROP INDEX ""IX_Orders_FimBizOrderId"";
+                    END IF;
+                END $$;
+            ");
+
+            // Удаляем новые колонки
             migrationBuilder.Sql(@"
                 DO $$
                 BEGIN
                     IF EXISTS (
                         SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'Orders' AND column_name = 'Carrier'
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'Carrier'
                     ) THEN
                         ALTER TABLE ""Orders"" DROP COLUMN ""Carrier"";
                     END IF;
@@ -95,34 +98,9 @@ namespace InternetShopService_back.Migrations
             migrationBuilder.Sql(@"
                 DO $$
                 BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'Orders' AND column_name = 'CarrierId'
-                    ) THEN
-                        ALTER TABLE ""Orders"" ADD COLUMN ""CarrierId"" uuid NULL;
-                    END IF;
-                END $$;
-            ");
-
-            // Удаляем индекс и колонки FimBiz
-            migrationBuilder.Sql(@"
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM pg_indexes 
-                        WHERE tablename = 'Orders' AND indexname = 'IX_Orders_FimBizOrderId'
-                    ) THEN
-                        DROP INDEX ""IX_Orders_FimBizOrderId"";
-                    END IF;
-                END $$;
-            ");
-
-            migrationBuilder.Sql(@"
-                DO $$
-                BEGIN
                     IF EXISTS (
                         SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'Orders' AND column_name = 'FimBizOrderId'
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'FimBizOrderId'
                     ) THEN
                         ALTER TABLE ""Orders"" DROP COLUMN ""FimBizOrderId"";
                     END IF;
@@ -134,13 +112,25 @@ namespace InternetShopService_back.Migrations
                 BEGIN
                     IF EXISTS (
                         SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = 'Orders' AND column_name = 'SyncedWithFimBizAt'
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'SyncedWithFimBizAt'
                     ) THEN
                         ALTER TABLE ""Orders"" DROP COLUMN ""SyncedWithFimBizAt"";
+                    END IF;
+                END $$;
+            ");
+
+            // Возвращаем CarrierId
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'CarrierId'
+                    ) THEN
+                        ALTER TABLE ""Orders"" ADD COLUMN ""CarrierId"" uuid NULL;
                     END IF;
                 END $$;
             ");
         }
     }
 }
-
