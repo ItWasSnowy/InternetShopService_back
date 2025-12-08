@@ -242,11 +242,20 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
         try
         {
             var headers = CreateHeaders();
-            return await _orderClient.CreateOrderAsync(request, headers);
+            var response = await _orderClient.CreateOrderAsync(request, headers);
+            
+            if (!response.Success)
+            {
+                _logger.LogWarning("FimBiz вернул неуспешный ответ при создании заказа {ExternalOrderId}: {Message}", 
+                    request.ExternalOrderId, response.Message);
+            }
+            
+            return response;
         }
         catch (RpcException ex)
         {
-            _logger.LogError(ex, "Ошибка gRPC при создании заказа {ExternalOrderId}", request.ExternalOrderId);
+            _logger.LogError(ex, "Ошибка gRPC при создании заказа {ExternalOrderId}. StatusCode: {StatusCode}, Detail: {Detail}", 
+                request.ExternalOrderId, ex.StatusCode, ex.Status.Detail);
             if (ex.StatusCode == StatusCode.Unauthenticated)
             {
                 throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");
@@ -264,7 +273,8 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
         }
         catch (RpcException ex)
         {
-            _logger.LogError(ex, "Ошибка gRPC при обновлении статуса заказа {ExternalOrderId}", request.ExternalOrderId);
+            _logger.LogError(ex, "Ошибка gRPC при обновлении статуса заказа {ExternalOrderId}. StatusCode: {StatusCode}, Detail: {Detail}", 
+                request.ExternalOrderId, ex.StatusCode, ex.Status.Detail);
             if (ex.StatusCode == StatusCode.Unauthenticated)
             {
                 throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");

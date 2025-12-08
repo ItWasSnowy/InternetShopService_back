@@ -49,8 +49,9 @@ message CreateOrderResponse {
 // Запрос обновления статуса заказа
 message UpdateOrderStatusRequest {
   string external_order_id = 1;          // ID заказа в интернет-магазине
-  OrderStatus new_status = 2;            // Новый статус
-  optional string comment = 3;           // Комментарий к изменению
+  int32 company_id = 2;                 // ID компании в FimBiz
+  OrderStatus new_status = 3;            // Новый статус
+  optional string comment = 4;           // Комментарий к изменению
 }
 
 // Ответ на обновление статуса
@@ -114,7 +115,7 @@ message TransferDocumentInfo {
 
 // Статус заказа
 enum OrderStatus {
-  ORDER_STATUS_UNKNOWN = 0;   // Неизвестный статус (по умолчанию должен быть 0)
+  ORDER_STATUS_UNSPECIFIED = 0;  // Первое значение должно быть 0 в proto3
   PROCESSING = 1;
   WAITING_FOR_PAYMENT = 2;
   BILL_CONFIRMED = 3;
@@ -129,7 +130,7 @@ enum OrderStatus {
 
 // Тип доставки
 enum DeliveryType {
-  DELIVERY_TYPE_UNKNOWN = 0;  // Неизвестный тип (по умолчанию должен быть 0)
+  DELIVERY_TYPE_UNSPECIFIED = 0;  // Первое значение должно быть 0 в proto3
   SELF_PICKUP = 1;
   COMPANY_DELIVERY = 2;
   TRANSPORT_COMPANY = 3;

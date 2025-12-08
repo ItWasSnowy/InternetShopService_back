@@ -211,6 +211,12 @@ public class OrderService : IOrderService
         _logger.LogInformation("Статус заказа {OrderId} изменен с {OldStatus} на {NewStatus}", 
             orderId, oldStatus, status);
 
+        // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
+        if (order.FimBizOrderId.HasValue)
+        {
+            await SendOrderStatusUpdateToFimBizAsync(order, status);
+        }
+
         // Отправляем уведомление на email контрагента при изменении статуса
         await SendOrderStatusNotificationAsync(order);
 
@@ -362,101 +368,216 @@ public class OrderService : IOrderService
 
     private async Task SendOrderToFimBizAsync(LocalOrder order, InternetShopService_back.Modules.UserCabinet.Models.UserAccount userAccount)
     {
-        // Получаем контрагента для FimBizContractorId
-        var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
-        if (counterparty == null || !counterparty.FimBizContractorId.HasValue)
+        try
         {
-            _logger.LogWarning("Не удалось отправить заказ {OrderId} в FimBiz: контрагент не имеет FimBizContractorId", order.Id);
-            return;
-        }
-
-        // Получаем магазин для company_id
-        var shop = await _shopRepository.GetByIdAsync(userAccount.ShopId);
-        if (shop == null)
-        {
-            _logger.LogWarning("Не удалось отправить заказ {OrderId} в FimBiz: магазин не найден для пользователя", order.Id);
-            return;
-        }
-
-        // Формируем адрес доставки
-        string deliveryAddress = string.Empty;
-        if (order.DeliveryAddressId.HasValue)
-        {
-            var address = await _deliveryAddressRepository.GetByIdAsync(order.DeliveryAddressId.Value);
-            if (address != null)
+            // Получаем контрагента для FimBizContractorId
+            var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
+            if (counterparty == null || !counterparty.FimBizContractorId.HasValue)
             {
-                var addressParts = new List<string>();
-                if (!string.IsNullOrEmpty(address.Region)) addressParts.Add(address.Region);
-                if (!string.IsNullOrEmpty(address.City)) addressParts.Add(address.City);
-                addressParts.Add(address.Address);
-                if (!string.IsNullOrEmpty(address.Apartment)) addressParts.Add($"кв. {address.Apartment}");
-                if (!string.IsNullOrEmpty(address.PostalCode)) addressParts.Add($"индекс: {address.PostalCode}");
-                deliveryAddress = string.Join(", ", addressParts);
-            }
-        }
-
-        // Преобразуем DeliveryType из нашей модели в gRPC
-        var deliveryType = order.DeliveryType switch
-        {
-            Models.DeliveryType.Pickup => GrpcDeliveryType.SelfPickup,
-            Models.DeliveryType.SellerDelivery => GrpcDeliveryType.CompanyDelivery,
-            Models.DeliveryType.Carrier => GrpcDeliveryType.TransportCompany,
-            _ => GrpcDeliveryType.SelfPickup // По умолчанию самовывоз
-        };
-
-        // Создаем запрос для FimBiz
-        var createOrderRequest = new CreateOrderRequest
-        {
-            CompanyId = shop.FimBizCompanyId,
-            ExternalOrderId = order.Id.ToString(),
-            ContractorId = counterparty.FimBizContractorId.Value,
-            DeliveryAddress = deliveryAddress,
-            DeliveryType = deliveryType
-        };
-
-        if (shop.FimBizOrganizationId.HasValue)
-        {
-            createOrderRequest.OrganizationId = shop.FimBizOrganizationId.Value;
-        }
-
-        // Добавляем позиции заказа
-        foreach (var item in order.Items)
-        {
-            createOrderRequest.Items.Add(new GrpcOrderItem
-            {
-                Name = item.NomenclatureName,
-                Quantity = item.Quantity,
-                Price = (long)(item.Price * 100), // Цена в копейках
-                IsAvailable = true, // TODO: получить из FimBiz
-                RequiresManufacturing = false // TODO: определить по наличию
-            });
-        }
-
-        // Отправляем в FimBiz
-        var response = await _fimBizGrpcClient.CreateOrderAsync(createOrderRequest);
-
-        if (response.Success && response.Order != null)
-        {
-            // Обновляем заказ с FimBizOrderId
-            order.FimBizOrderId = response.Order.OrderId;
-            order.OrderNumber = response.Order.OrderNumber;
-            order.SyncedWithFimBizAt = DateTime.UtcNow;
-            
-            // Если вернули трек-номер, сохраняем
-            if (!string.IsNullOrEmpty(response.Order.TrackingNumber))
-            {
-                order.TrackingNumber = response.Order.TrackingNumber;
+                _logger.LogWarning("Не удалось отправить заказ {OrderId} в FimBiz: контрагент не имеет FimBizContractorId", order.Id);
+                return;
             }
 
-            await _orderRepository.UpdateAsync(order);
-            
-            _logger.LogInformation("Заказ {OrderId} успешно отправлен в FimBiz. FimBizOrderId: {FimBizOrderId}", 
-                order.Id, order.FimBizOrderId);
+            if (counterparty.FimBizContractorId.Value <= 0)
+            {
+                _logger.LogError("Не удалось отправить заказ {OrderId}: неверный FimBizContractorId {ContractorId}", 
+                    order.Id, counterparty.FimBizContractorId.Value);
+                return;
+            }
+
+            // Получаем магазин для company_id
+            var shop = await _shopRepository.GetByIdAsync(userAccount.ShopId);
+            if (shop == null)
+            {
+                _logger.LogWarning("Не удалось отправить заказ {OrderId} в FimBiz: магазин не найден для пользователя", order.Id);
+                return;
+            }
+
+            if (shop.FimBizCompanyId <= 0)
+            {
+                _logger.LogError("Не удалось отправить заказ {OrderId}: неверный FimBizCompanyId {CompanyId}", 
+                    order.Id, shop.FimBizCompanyId);
+                return;
+            }
+
+            // Формируем адрес доставки
+            string deliveryAddress = string.Empty;
+            if (order.DeliveryAddressId.HasValue)
+            {
+                var address = await _deliveryAddressRepository.GetByIdAsync(order.DeliveryAddressId.Value);
+                if (address != null)
+                {
+                    var addressParts = new List<string>();
+                    if (!string.IsNullOrEmpty(address.Region)) addressParts.Add(address.Region);
+                    if (!string.IsNullOrEmpty(address.City)) addressParts.Add(address.City);
+                    addressParts.Add(address.Address);
+                    if (!string.IsNullOrEmpty(address.Apartment)) addressParts.Add($"кв. {address.Apartment}");
+                    if (!string.IsNullOrEmpty(address.PostalCode)) addressParts.Add($"индекс: {address.PostalCode}");
+                    deliveryAddress = string.Join(", ", addressParts);
+                }
+            }
+
+            // Для самовывоза адрес может быть пустым, но лучше указать явно
+            if (string.IsNullOrEmpty(deliveryAddress) && order.DeliveryType == Models.DeliveryType.Pickup)
+            {
+                deliveryAddress = "Самовывоз";
+            }
+
+            // Преобразуем DeliveryType из нашей модели в gRPC
+            var deliveryType = order.DeliveryType switch
+            {
+                Models.DeliveryType.Pickup => GrpcDeliveryType.SelfPickup,
+                Models.DeliveryType.SellerDelivery => GrpcDeliveryType.CompanyDelivery,
+                Models.DeliveryType.Carrier => GrpcDeliveryType.TransportCompany,
+                _ => (GrpcDeliveryType)0 // DeliveryTypeUnspecified = 0 (значение по умолчанию в proto3)
+            };
+
+            // Проверяем, что есть позиции заказа
+            if (!order.Items.Any())
+            {
+                _logger.LogError("Не удалось отправить заказ {OrderId} в FimBiz: заказ не содержит позиций", order.Id);
+                return;
+            }
+
+            // Создаем запрос для FimBiz
+            var createOrderRequest = new CreateOrderRequest
+            {
+                CompanyId = shop.FimBizCompanyId,
+                ExternalOrderId = order.Id.ToString(),
+                ContractorId = counterparty.FimBizContractorId.Value,
+                DeliveryAddress = deliveryAddress,
+                DeliveryType = deliveryType
+            };
+
+            if (shop.FimBizOrganizationId.HasValue && shop.FimBizOrganizationId.Value > 0)
+            {
+                createOrderRequest.OrganizationId = shop.FimBizOrganizationId.Value;
+            }
+
+            // Добавляем позиции заказа
+            foreach (var item in order.Items)
+            {
+                createOrderRequest.Items.Add(new GrpcOrderItem
+                {
+                    Name = item.NomenclatureName,
+                    Quantity = item.Quantity,
+                    Price = (long)(item.Price * 100), // Цена в копейках
+                    IsAvailable = true, // TODO: получить из FimBiz
+                    RequiresManufacturing = false // TODO: определить по наличию
+                });
+            }
+
+            _logger.LogInformation("Отправка заказа {OrderId} в FimBiz. CompanyId: {CompanyId}, ContractorId: {ContractorId}, ItemsCount: {ItemsCount}", 
+                order.Id, shop.FimBizCompanyId, counterparty.FimBizContractorId.Value, order.Items.Count);
+
+            // Отправляем в FimBiz
+            var response = await _fimBizGrpcClient.CreateOrderAsync(createOrderRequest);
+
+            if (response.Success && response.Order != null)
+            {
+                // Обновляем заказ с FimBizOrderId
+                order.FimBizOrderId = response.Order.OrderId;
+                order.OrderNumber = response.Order.OrderNumber;
+                order.SyncedWithFimBizAt = DateTime.UtcNow;
+                
+                // Если вернули трек-номер, сохраняем
+                if (!string.IsNullOrEmpty(response.Order.TrackingNumber))
+                {
+                    order.TrackingNumber = response.Order.TrackingNumber;
+                }
+
+                await _orderRepository.UpdateAsync(order);
+                
+                _logger.LogInformation("Заказ {OrderId} успешно отправлен в FimBiz. FimBizOrderId: {FimBizOrderId}, OrderNumber: {OrderNumber}", 
+                    order.Id, order.FimBizOrderId, order.OrderNumber);
+            }
+            else
+            {
+                _logger.LogWarning("Не удалось создать заказ {OrderId} в FimBiz: {Message}", 
+                    order.Id, response.Message ?? "Неизвестная ошибка");
+            }
         }
-        else
+        catch (Grpc.Core.RpcException ex)
         {
-            _logger.LogWarning("Не удалось создать заказ {OrderId} в FimBiz: {Message}", 
-                order.Id, response.Message);
+            _logger.LogError(ex, "Ошибка gRPC при отправке заказа {OrderId} в FimBiz. StatusCode: {StatusCode}, Detail: {Detail}", 
+                order.Id, ex.StatusCode, ex.Status.Detail);
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Неожиданная ошибка при отправке заказа {OrderId} в FimBiz", order.Id);
+        }
+    }
+
+    private async Task SendOrderStatusUpdateToFimBizAsync(LocalOrder order, OrderStatus newStatus)
+    {
+        try
+        {
+            // Получаем магазин для company_id
+            var userAccount = await _userAccountRepository.GetByIdAsync(order.CounterpartyId);
+            if (userAccount == null)
+            {
+                _logger.LogWarning("Не удалось отправить обновление статуса заказа {OrderId}: пользователь не найден", order.Id);
+                return;
+            }
+
+            var shop = await _shopRepository.GetByIdAsync(userAccount.ShopId);
+            if (shop == null || shop.FimBizCompanyId <= 0)
+            {
+                _logger.LogWarning("Не удалось отправить обновление статуса заказа {OrderId}: магазин не найден или неверный FimBizCompanyId", order.Id);
+                return;
+            }
+
+            // Преобразуем статус из нашей модели в gRPC
+            var grpcStatus = MapToGrpcOrderStatus(newStatus);
+
+            var updateRequest = new UpdateOrderStatusRequest
+            {
+                ExternalOrderId = order.Id.ToString(),
+                CompanyId = shop.FimBizCompanyId,
+                NewStatus = grpcStatus
+            };
+
+            _logger.LogInformation("Отправка обновления статуса заказа {OrderId} в FimBiz. Новый статус: {Status}", 
+                order.Id, newStatus);
+
+            var response = await _fimBizGrpcClient.UpdateOrderStatusAsync(updateRequest);
+
+            if (response.Success)
+            {
+                _logger.LogInformation("Статус заказа {OrderId} успешно обновлен в FimBiz", order.Id);
+            }
+            else
+            {
+                _logger.LogWarning("Не удалось обновить статус заказа {OrderId} в FimBiz: {Message}", 
+                    order.Id, response.Message ?? "Неизвестная ошибка");
+            }
+        }
+        catch (Grpc.Core.RpcException ex)
+        {
+            _logger.LogError(ex, "Ошибка gRPC при обновлении статуса заказа {OrderId} в FimBiz. StatusCode: {StatusCode}, Detail: {Detail}", 
+                order.Id, ex.StatusCode, ex.Status.Detail);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Неожиданная ошибка при обновлении статуса заказа {OrderId} в FimBiz", order.Id);
+        }
+    }
+
+    private GrpcOrderStatus MapToGrpcOrderStatus(OrderStatus status)
+    {
+        return status switch
+        {
+            OrderStatus.Processing => GrpcOrderStatus.Processing,
+            OrderStatus.AwaitingPayment => GrpcOrderStatus.WaitingForPayment,
+            OrderStatus.InvoiceConfirmed => GrpcOrderStatus.BillConfirmed,
+            OrderStatus.Manufacturing => GrpcOrderStatus.Manufacturing,
+            OrderStatus.Assembling => GrpcOrderStatus.Picking,
+            OrderStatus.TransferredToCarrier => GrpcOrderStatus.TransferredToTransport,
+            OrderStatus.DeliveringByCarrier => GrpcOrderStatus.DeliveringByTransport,
+            OrderStatus.Delivering => GrpcOrderStatus.Delivering,
+            OrderStatus.AwaitingPickup => GrpcOrderStatus.AwaitingPickup,
+            OrderStatus.Received => GrpcOrderStatus.Completed,
+            _ => (GrpcOrderStatus)0 // OrderStatusUnspecified = 0
+        };
     }
 }
