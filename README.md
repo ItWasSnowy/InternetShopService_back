@@ -128,6 +128,7 @@ InternetShopService_back/
 
 - **[API_DOCUMENTATION.md](./docs/API_DOCUMENTATION.md)** - Полная документация с примерами
 - **[API_QUICK_REFERENCE.md](./docs/API_QUICK_REFERENCE.md)** - Краткая справка по эндпоинтам
+- **[ORDER_API_DOCUMENTATION.md](./docs/ORDER_API_DOCUMENTATION.md)** - Подробная документация по API заказов
 
 ## Следующие шаги
 

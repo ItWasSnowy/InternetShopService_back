@@ -388,6 +388,67 @@ public class AuthService : IAuthService
         }
     }
 
+    public async Task ChangePasswordAsync(Guid userId, string currentPassword, string newPassword)
+    {
+        try
+        {
+            var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+            if (userAccount == null)
+            {
+                throw new InvalidOperationException("Пользователь не найден");
+            }
+
+            // Проверяем, что пароль установлен
+            if (!userAccount.IsPasswordSet || string.IsNullOrEmpty(userAccount.PasswordHash))
+            {
+                throw new InvalidOperationException("Пароль не установлен. Используйте установку пароля вместо смены");
+            }
+
+            // Проверяем текущий пароль
+            if (!BCrypt.Net.BCrypt.Verify(currentPassword, userAccount.PasswordHash))
+            {
+                throw new UnauthorizedAccessException("Неверный текущий пароль");
+            }
+
+            // Валидация нового пароля
+            if (string.IsNullOrWhiteSpace(newPassword) || newPassword.Length < 6)
+            {
+                throw new ArgumentException("Новый пароль должен содержать минимум 6 символов");
+            }
+
+            // Проверяем, что новый пароль отличается от текущего
+            if (BCrypt.Net.BCrypt.Verify(newPassword, userAccount.PasswordHash))
+            {
+                throw new ArgumentException("Новый пароль должен отличаться от текущего");
+            }
+
+            // Устанавливаем новый пароль
+            userAccount.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+            userAccount.UpdatedAt = DateTime.UtcNow;
+
+            await _userAccountRepository.UpdateAsync(userAccount);
+
+            _logger.LogInformation("Пароль изменен для пользователя {UserId}", userId);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw;
+        }
+        catch (ArgumentException)
+        {
+            throw;
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при смене пароля для пользователя {UserId}", userId);
+            throw;
+        }
+    }
+
     public async Task<AuthResponseDto> LoginByPasswordAsync(string phoneNumber, string password)
     {
         try

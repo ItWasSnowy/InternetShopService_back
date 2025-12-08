@@ -20,6 +20,7 @@ Authorization: Bearer {accessToken}
 | POST | `/api/auth/request-code` | Запрос кода по звонку | ❌ |
 | POST | `/api/auth/verify-code` | Проверка кода | ❌ |
 | POST | `/api/auth/set-password` | Установка пароля | ✅ |
+| POST | `/api/auth/change-password` | Смена пароля | ✅ |
 | POST | `/api/auth/login` | Вход по паролю | ❌ |
 | POST | `/api/auth/refresh` | Обновление токена | ❌ |
 | POST | `/api/auth/logout` | Выход | ✅ |

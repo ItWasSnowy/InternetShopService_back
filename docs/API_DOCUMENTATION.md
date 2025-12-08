@@ -172,7 +172,133 @@ localStorage.setItem('refreshToken', data.refreshToken);
 
 ---
 
-### 1.4. Вход по паролю
+### 1.4. Смена пароля
+
+**POST** `/api/auth/change-password`
+
+**Требует авторизации:** Да
+
+Изменяет пароль пользователя. Требует указания текущего пароля для подтверждения.
+
+**Заголовки:**
+```
+Authorization: Bearer {accessToken}
+Content-Type: application/json
+```
+
+**Тело запроса:**
+```json
+{
+  "currentPassword": "старый_пароль123",
+  "newPassword": "новый_пароль456"
+}
+```
+
+**Параметры:**
+
+| Параметр | Тип | Обязательный | Описание |
+|----------|-----|--------------|----------|
+| `currentPassword` | `string` | ✅ Да | Текущий пароль пользователя |
+| `newPassword` | `string` | ✅ Да | Новый пароль (минимум 6 символов) |
+
+**Успешный ответ (200 OK):**
+```json
+{
+  "message": "Пароль успешно изменен"
+}
+```
+
+**Ошибки:**
+
+| Код | Описание |
+|-----|----------|
+| `400 Bad Request` | Неверный формат данных, новый пароль слишком короткий (менее 6 символов), новый пароль совпадает с текущим |
+| `401 Unauthorized` | Пользователь не авторизован, токен недействителен или неверный текущий пароль |
+| `500 Internal Server Error` | Внутренняя ошибка сервера |
+
+**Важные замечания:**
+
+1. **Текущий пароль обязателен** - Для безопасности требуется указать текущий пароль
+2. **Минимальная длина** - Новый пароль должен содержать минимум 6 символов
+3. **Пароль должен отличаться** - Новый пароль должен отличаться от текущего
+4. **Пароль должен быть установлен** - Если пароль не был установлен ранее, используйте `/api/auth/set-password` вместо смены пароля
+5. **ID пользователя** - Автоматически определяется из JWT токена, не требуется передавать в запросе
+
+**Пример использования:**
+
+```javascript
+const response = await fetch('/api/auth/change-password', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${accessToken}`
+  },
+  body: JSON.stringify({
+    currentPassword: 'старый_пароль123',
+    newPassword: 'новый_пароль456'
+  })
+});
+
+if (response.ok) {
+  const data = await response.json();
+  console.log(data.message); // "Пароль успешно изменен"
+} else {
+  const error = await response.json();
+  console.error(error.error);
+}
+```
+
+**Пример с обработкой ошибок:**
+
+```javascript
+async function changePassword(currentPassword, newPassword) {
+  try {
+    const response = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        currentPassword: currentPassword,
+        newPassword: newPassword
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      
+      if (response.status === 401) {
+        // Неверный текущий пароль или токен истек
+        throw new Error(error.error || 'Неверный пароль или токен истек');
+      } else if (response.status === 400) {
+        // Неверный формат или валидация не прошла
+        throw new Error(error.error || 'Ошибка валидации');
+      }
+      
+      throw new Error('Ошибка при смене пароля');
+    }
+
+    const data = await response.json();
+    return data.message;
+  } catch (error) {
+    console.error('Ошибка смены пароля:', error);
+    throw error;
+  }
+}
+
+// Использование
+try {
+  await changePassword('старый_пароль', 'новый_пароль123');
+  alert('Пароль успешно изменен');
+} catch (error) {
+  alert(error.message);
+}
+```
+
+---
+
+### 1.5. Вход по паролю
 
 **POST** `/api/auth/login`
 
