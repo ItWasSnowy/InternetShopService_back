@@ -4,7 +4,7 @@ option csharp_namespace = "InternetShopService_back.Infrastructure.Grpc.Orders";
 
 package orders;
 
-// Сервис синхронизации заказов
+// Сервис синхронизации заказов (клиентский - для отправки в FimBiz)
 service OrderSyncService {
   // Создать заказ из интернет-магазина
   rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
@@ -14,6 +14,15 @@ service OrderSyncService {
   
   // Получить информацию о заказе
   rpc GetOrder (GetOrderRequest) returns (Order);
+}
+
+// Серверный сервис для приема обновлений от FimBiz
+service OrderSyncServerService {
+  // Уведомление об изменении статуса заказа от FimBiz
+  rpc NotifyOrderStatusChange (NotifyOrderStatusChangeRequest) returns (NotifyOrderStatusChangeResponse);
+  
+  // Уведомление об обновлении заказа от FimBiz
+  rpc NotifyOrderUpdate (NotifyOrderUpdateRequest) returns (NotifyOrderUpdateResponse);
 }
 
 // Запрос создания заказа
@@ -132,5 +141,39 @@ enum BillStatus {
   PAID = 1;
   CONFIRMED = 2;
   CANCELLED = 3;
+}
+
+// Запрос уведомления об изменении статуса заказа
+message NotifyOrderStatusChangeRequest {
+  string external_order_id = 1;          // ID заказа в интернет-магазине
+  int32 fim_biz_order_id = 2;            // ID заказа в FimBiz
+  OrderStatus new_status = 3;            // Новый статус
+  optional string comment = 4;           // Комментарий к изменению
+  optional int64 modified_price = 5;     // Измененная стоимость (в копейках)
+  optional string tracking_number = 6;   // Трек-номер
+  optional BillInfo bill_info = 7;       // Информация о счете (если создан)
+  optional TransferDocumentInfo upd_info = 8; // Информация об УПД (если создан)
+  optional int32 assembler_id = 9;       // ID сборщика (если назначен)
+  optional int32 driver_id = 10;         // ID водителя (если назначен)
+  bool is_priority = 11;                 // Приоритетный заказ
+  bool is_long_assembling = 12;          // Флаг долгой сборки
+  int64 status_changed_at = 13;          // Unix timestamp изменения статуса
+}
+
+// Ответ на уведомление об изменении статуса
+message NotifyOrderStatusChangeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Запрос уведомления об обновлении заказа
+message NotifyOrderUpdateRequest {
+  Order order = 1;                       // Полная информация о заказе
+}
+
+// Ответ на уведомление об обновлении
+message NotifyOrderUpdateResponse {
+  bool success = 1;
+  string message = 2;
 }
 

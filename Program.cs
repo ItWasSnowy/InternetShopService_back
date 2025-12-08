@@ -285,6 +285,7 @@ app.UseUserContext();
 
 // Map gRPC service
 app.MapGrpcService<ContractorSyncGrpcService>();
+app.MapGrpcService<OrderSyncGrpcService>();
 
 app.MapControllers();
 
