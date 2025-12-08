@@ -370,6 +370,23 @@ public class OrderService : IOrderService
     {
         try
         {
+            // Убеждаемся, что Items загружены
+            // Если заказ только что создан, Items должны быть в памяти
+            // Но если заказ загружен из БД, нужно проверить
+            if (order.Items == null || !order.Items.Any())
+            {
+                _logger.LogWarning("Заказ {OrderId} не содержит Items. Попытка явной загрузки...", order.Id);
+                
+                // Явная загрузка Items через EF Core
+                await _context.Entry(order).Collection(o => o.Items).LoadAsync();
+                
+                if (order.Items == null || !order.Items.Any())
+                {
+                    _logger.LogError("Не удалось загрузить Items для заказа {OrderId}", order.Id);
+                    return;
+                }
+            }
+
             // Получаем контрагента для FimBizContractorId
             var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
             if (counterparty == null || !counterparty.FimBizContractorId.HasValue)
@@ -457,14 +474,29 @@ public class OrderService : IOrderService
             // Добавляем позиции заказа
             foreach (var item in order.Items)
             {
-                createOrderRequest.Items.Add(new GrpcOrderItem
+                var grpcItem = new GrpcOrderItem
                 {
                     Name = item.NomenclatureName,
                     Quantity = item.Quantity,
                     Price = (long)(item.Price * 100), // Цена в копейках
                     IsAvailable = true, // TODO: получить из FimBiz
                     RequiresManufacturing = false // TODO: определить по наличию
-                });
+                };
+                
+                // Преобразуем Guid NomenclatureId в int32 для FimBiz
+                // Используем первые 4 байта Guid как int32
+                // ВАЖНО: Это может давать коллизии, так как Guid - 128 бит, а int32 - 32 бита
+                // В идеале нужно хранить маппинг Guid -> int32 в отдельной таблице
+                if (item.NomenclatureId != Guid.Empty)
+                {
+                    var bytes = item.NomenclatureId.ToByteArray();
+                    grpcItem.NomenclatureId = BitConverter.ToInt32(bytes, 0);
+                    
+                    _logger.LogDebug("Отправка позиции заказа: NomenclatureId={NomenclatureId} (из Guid {Guid})", 
+                        grpcItem.NomenclatureId, item.NomenclatureId);
+                }
+                
+                createOrderRequest.Items.Add(grpcItem);
             }
 
             _logger.LogInformation("Отправка заказа {OrderId} в FimBiz. CompanyId: {CompanyId}, ContractorId: {ContractorId}, ItemsCount: {ItemsCount}", 
