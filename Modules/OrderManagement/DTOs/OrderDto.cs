@@ -15,6 +15,7 @@ public class OrderDto
     public List<OrderItemDto> Items { get; set; } = new();
     public DeliveryAddressDto? DeliveryAddress { get; set; }
     public CargoReceiverDto? CargoReceiver { get; set; }
+    public string? Carrier { get; set; } // Название транспортной компании
     public List<OrderAttachmentDto> Attachments { get; set; } = new();
 }
 
@@ -60,7 +61,7 @@ public class CreateOrderDto
     public DeliveryType DeliveryType { get; set; }
     public Guid? DeliveryAddressId { get; set; }
     public Guid? CargoReceiverId { get; set; }
-    public Guid? CarrierId { get; set; }
+    public string? Carrier { get; set; } // Название транспортной компании
     public List<CreateOrderItemDto> Items { get; set; } = new();
 }
 

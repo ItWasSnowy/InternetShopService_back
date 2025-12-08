@@ -28,7 +28,7 @@ Authorization: Bearer {accessToken}
   "deliveryType": 1,
   "deliveryAddressId": "123e4567-e89b-12d3-a456-426614174003",
   "cargoReceiverId": "123e4567-e89b-12d3-a456-426614174004",
-  "carrierId": "123e4567-e89b-12d3-a456-426614174005"
+  "carrier": "СДЭК"
 }
 ```
 
@@ -39,7 +39,7 @@ Authorization: Bearer {accessToken}
 | `deliveryType` | `integer` | ✅ Да | Тип доставки (см. таблицу ниже) |
 | `deliveryAddressId` | `Guid?` | ⚠️ Условно | ID адреса доставки. Обязателен для типов доставки `Carrier` (2) и `SellerDelivery` (3) |
 | `cargoReceiverId` | `Guid?` | ❌ Нет | ID грузополучателя (для юридических лиц) |
-| `carrierId` | `Guid?` | ⚠️ Условно | ID транспортной компании. Обязателен для типа доставки `Carrier` (2) |
+| `carrier` | `string?` | ⚠️ Условно | Название транспортной компании. Обязателен для типа доставки `Carrier` (2) |
 
 **Типы доставки (`deliveryType`):**
 
@@ -119,7 +119,7 @@ Authorization: Bearer {accessToken}
 {
   "deliveryType": 2,
   "deliveryAddressId": "123e4567-e89b-12d3-a456-426614174003",
-  "carrierId": "123e4567-e89b-12d3-a456-426614174005"
+  "carrier": "СДЭК"
 }
 ```
 
@@ -137,7 +137,7 @@ Authorization: Bearer {accessToken}
   "deliveryType": 2,
   "deliveryAddressId": "123e4567-e89b-12d3-a456-426614174003",
   "cargoReceiverId": "123e4567-e89b-12d3-a456-426614174004",
-  "carrierId": "123e4567-e89b-12d3-a456-426614174005"
+  "carrier": "СДЭК"
 }
 ```
 
@@ -358,7 +358,7 @@ async function createOrderFromCart(deliveryType: number, deliveryAddressId?: str
       deliveryType: deliveryType,
       deliveryAddressId: deliveryAddressId || null,
       cargoReceiverId: null,
-      carrierId: deliveryType === 2 ? carrierId : null
+      carrier: deliveryType === 2 ? carrier : null
     })
   });
 
@@ -430,7 +430,7 @@ const createOrder = async (orderData: {
   deliveryType: number;
   deliveryAddressId?: string;
   cargoReceiverId?: string;
-  carrierId?: string;
+  carrier?: string;
 }) => {
   const response = await api.post('/cart/create-order', orderData);
   return response.data;
@@ -468,7 +468,7 @@ const getOrder = async (orderId: string) => {
    - Корзина не пуста
    - Адрес доставки существует и принадлежит пользователю
    - Грузополучатель существует и принадлежит пользователю
-   - Для типа доставки `Carrier` указан `carrierId`
+   - Для типа доставки `Carrier` указан `carrier`
    - Для типов доставки `Carrier` и `SellerDelivery` указан `deliveryAddressId`
 
 3. **404 Not Found** - Заказ не найден или не принадлежит текущему пользователю.
@@ -489,7 +489,7 @@ const getOrder = async (orderId: string) => {
 
 5. **Типы доставки**: 
    - Для `Pickup` (1) адрес доставки не требуется
-   - Для `Carrier` (2) обязательны `deliveryAddressId` и `carrierId`
+   - Для `Carrier` (2) обязательны `deliveryAddressId` и `carrier`
    - Для `SellerDelivery` (3) обязателен `deliveryAddressId`
 
 ---

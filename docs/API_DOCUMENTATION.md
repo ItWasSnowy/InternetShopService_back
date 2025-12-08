@@ -570,7 +570,7 @@ if (refreshResponse.ok) {
   "deliveryType": "SelfPickup",
   "deliveryAddressId": "123e4567-e89b-12d3-a456-426614174003",
   "cargoReceiverId": "123e4567-e89b-12d3-a456-426614174004",
-  "carrierId": "123e4567-e89b-12d3-a456-426614174005"
+  "carrier": "СДЭК"
 }
 ```
 
@@ -581,7 +581,7 @@ if (refreshResponse.ok) {
   - `ShopDelivery` - Доставка магазином
 - `deliveryAddressId` (Guid, optional) - ID адреса доставки (обязателен для Carrier и ShopDelivery)
 - `cargoReceiverId` (Guid, optional) - ID грузополучателя
-- `carrierId` (Guid, optional) - ID транспортной компании (обязателен для Carrier)
+- `carrier` (string, optional) - Название транспортной компании (обязателен для Carrier)
 
 **Успешный ответ (201 Created):**
 ```json
@@ -1128,7 +1128,7 @@ const order = await orderResponse.json();
 
 4. **Типы доставки**:
    - `SelfPickup` - Самовывоз (не требует адреса)
-   - `Carrier` - Транспортная компания (требует адрес и carrierId)
+   - `Carrier` - Транспортная компания (требует адрес и carrier)
    - `ShopDelivery` - Доставка магазином (требует адрес)
 
 5. **Сессии**: Каждый вход создает новую сессию. Старые сессии могут быть деактивированы автоматически или вручную.

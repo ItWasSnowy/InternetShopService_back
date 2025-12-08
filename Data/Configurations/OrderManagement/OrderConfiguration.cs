@@ -19,6 +19,9 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(x => x.TrackingNumber)
             .HasMaxLength(100);
 
+        builder.Property(x => x.Carrier)
+            .HasMaxLength(500);
+
         builder.Property(x => x.TotalAmount)
             .HasPrecision(18, 2);
 

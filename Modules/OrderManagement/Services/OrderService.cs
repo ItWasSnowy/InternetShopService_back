@@ -103,7 +103,7 @@ public class OrderService : IOrderService
             DeliveryType = dto.DeliveryType,
             DeliveryAddressId = dto.DeliveryAddressId,
             CargoReceiverId = dto.CargoReceiverId,
-            CarrierId = dto.CarrierId,
+            Carrier = dto.Carrier,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
@@ -268,6 +268,7 @@ public class OrderService : IOrderService
             StatusName = GetStatusName(order.Status),
             DeliveryType = order.DeliveryType,
             TrackingNumber = order.TrackingNumber,
+            Carrier = order.Carrier,
             TotalAmount = order.TotalAmount,
             CreatedAt = order.CreatedAt,
             Items = order.Items.Select(i => new OrderItemDto

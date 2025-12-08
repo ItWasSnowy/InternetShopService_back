@@ -387,7 +387,7 @@ Content-Type: application/json
   "deliveryType": 1,
   "deliveryAddressId": "8d9e6679-7425-40de-944b-e07fc1f90ae8",
   "cargoReceiverId": "9e0f7780-8536-51ef-a55c-f18fd2g01bf9",
-  "carrierId": "0f1g8891-9647-62fg-b66d-g29ge3h12cg0"
+  "carrier": "СДЭК"
 }
 ```
 
@@ -397,7 +397,7 @@ Content-Type: application/json
 | `deliveryType` | integer | Да | Тип доставки: `1` - Самовывоз, `2` - Транспортная компания, `3` - Доставка магазином |
 | `deliveryAddressId` | GUID (string) | Нет | Идентификатор адреса доставки (обязателен если не самовывоз) |
 | `cargoReceiverId` | GUID (string) | Нет | Идентификатор грузополучателя |
-| `carrierId` | GUID (string) | Нет | Идентификатор транспортной компании (обязателен для типа доставки "Транспортная компания") |
+| `carrier` | string | Нет | Название транспортной компании (обязателен для типа доставки "Транспортная компания") |
 
 **Ответ (201 Created):**
 ```json
@@ -435,7 +435,7 @@ const orderRequest = {
   deliveryType: 2, // Транспортная компания
   deliveryAddressId: "8d9e6679-7425-40de-944b-e07fc1f90ae8",
   cargoReceiverId: "9e0f7780-8536-51ef-a55c-f18fd2g01bf9",
-  carrierId: "0f1g8891-9647-62fg-b66d-g29ge3h12cg0"
+  carrier: "0f1g8891-9647-62fg-b66d-g29ge3h12cg0"
 };
 
 const response = await fetch('https://test.fimbiz.ru/api/cart/create-order', {
