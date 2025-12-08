@@ -39,14 +39,15 @@ public class CargoReceiverRepository : ICargoReceiverRepository
         receiver.CreatedAt = DateTime.UtcNow;
         receiver.UpdatedAt = DateTime.UtcNow;
 
-        // Если это первый грузополучатель или установлен как дефолтный, снимаем флаг с других
+        // Сначала добавляем и сохраняем объект, чтобы получить ID
+        _context.CargoReceivers.Add(receiver);
+        await _context.SaveChangesAsync();
+
+        // Теперь, если установлен как дефолтный, снимаем флаг с других
         if (receiver.IsDefault)
         {
             await SetDefaultAsync(receiver.UserAccountId, receiver.Id);
         }
-
-        _context.CargoReceivers.Add(receiver);
-        await _context.SaveChangesAsync();
 
         return receiver;
     }

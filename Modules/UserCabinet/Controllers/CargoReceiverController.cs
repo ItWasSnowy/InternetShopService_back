@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Helpers;
 using InternetShopService_back.Modules.UserCabinet.Services;
+using Microsoft.Extensions.Logging;
 
 namespace InternetShopService_back.Modules.UserCabinet.Controllers;
 
@@ -12,10 +13,12 @@ namespace InternetShopService_back.Modules.UserCabinet.Controllers;
 public class CargoReceiverController : ControllerBase
 {
     private readonly ICargoReceiverService _receiverService;
+    private readonly ILogger<CargoReceiverController> _logger;
 
-    public CargoReceiverController(ICargoReceiverService receiverService)
+    public CargoReceiverController(ICargoReceiverService receiverService, ILogger<CargoReceiverController> logger)
     {
         _receiverService = receiverService;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -107,8 +110,9 @@ public class CargoReceiverController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogError(ex, "Ошибка при создании грузополучателя для пользователя {UserId}", userId);
             return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
         }
     }
