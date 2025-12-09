@@ -9,6 +9,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OrderStatus = InternetShopService_back.Modules.OrderManagement.Models.OrderStatus;
 using GrpcOrderStatus = InternetShopService_back.Infrastructure.Grpc.Orders.OrderStatus;
+using GrpcDeliveryType = InternetShopService_back.Infrastructure.Grpc.Orders.DeliveryType;
+using LocalDeliveryType = InternetShopService_back.Modules.OrderManagement.Models.DeliveryType;
 using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order;
 using LocalOrderItem = InternetShopService_back.Modules.OrderManagement.Models.OrderItem;
 using GrpcOrder = InternetShopService_back.Infrastructure.Grpc.Orders.Order;
@@ -263,6 +265,16 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 _logger.LogInformation("Request.Order.ExternalOrderId: {ExternalOrderId}", request.Order.ExternalOrderId);
                 _logger.LogInformation("Request.Order.OrderId (FimBiz): {OrderId}", request.Order.OrderId);
                 _logger.LogInformation("Request.Order.Status: {Status}", request.Order.Status);
+                _logger.LogInformation("Request.Order.DeliveryType: {DeliveryType}", request.Order.DeliveryType);
+                _logger.LogInformation("Request.Order.DeliveryAddress: {DeliveryAddress}", request.Order.DeliveryAddress ?? "не указан");
+                _logger.LogInformation("Request.Order.Carrier: {Carrier}", request.Order.Carrier ?? "не указан");
+                _logger.LogInformation("Request.Order.IsPriority: {IsPriority}", request.Order.IsPriority);
+                _logger.LogInformation("Request.Order.IsLongAssembling: {IsLongAssembling}", request.Order.IsLongAssembling);
+                _logger.LogInformation("Request.Order.AssemblerId: {AssemblerId}", request.Order.HasAssemblerId ? request.Order.AssemblerId.ToString() : "не указан");
+                _logger.LogInformation("Request.Order.DriverId: {DriverId}", request.Order.HasDriverId ? request.Order.DriverId.ToString() : "не указан");
+                _logger.LogInformation("Request.Order.HasAssembledAt: {HasAssembledAt}", request.Order.HasAssembledAt);
+                _logger.LogInformation("Request.Order.HasShippedAt: {HasShippedAt}", request.Order.HasShippedAt);
+                _logger.LogInformation("Request.Order.HasDeliveredAt: {HasDeliveredAt}", request.Order.HasDeliveredAt);
                 _logger.LogInformation("Request.Order.HasBillInfo: {HasBillInfo}", request.Order.BillInfo != null);
                 _logger.LogInformation("Request.Order.HasUpdInfo: {HasUpdInfo}", request.Order.UpdInfo != null);
                 _logger.LogInformation("Request.Order.Items.Count: {ItemsCount}", request.Order.Items?.Count ?? 0);
@@ -341,14 +353,31 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             var oldTrackingNumber = order.TrackingNumber;
             var oldOrderNumber = order.OrderNumber;
             var oldFimBizOrderId = order.FimBizOrderId;
+            var oldDeliveryType = order.DeliveryType;
+            var oldCarrier = order.Carrier;
             var oldIsPriority = order.IsPriority;
             var oldIsLongAssembling = order.IsLongAssembling;
+            var oldAssembledAt = order.AssembledAt;
+            var oldShippedAt = order.ShippedAt;
+            var oldDeliveredAt = order.DeliveredAt;
 
             // Обновляем все поля заказа из FimBiz
             order.FimBizOrderId = request.Order.OrderId;
             order.OrderNumber = request.Order.OrderNumber;
             order.Status = MapGrpcStatusToLocal(request.Order.Status);
             order.TotalAmount = (decimal)request.Order.TotalPrice / 100; // Из копеек в рубли
+            
+            // Обновляем DeliveryType, если он указан (проверяем, что не равен 0 - DeliveryTypeUnspecified)
+            if (request.Order.DeliveryType != 0)
+            {
+                var newDeliveryType = MapGrpcDeliveryTypeToLocal(request.Order.DeliveryType);
+                if (oldDeliveryType != newDeliveryType)
+                {
+                    _logger.LogInformation("Обновлен DeliveryType заказа {OrderId} с {OldDeliveryType} на {NewDeliveryType}", 
+                        orderId, oldDeliveryType, newDeliveryType);
+                }
+                order.DeliveryType = newDeliveryType;
+            }
             
             if (request.Order.HasModifiedPrice)
             {
@@ -360,9 +389,44 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 order.TrackingNumber = request.Order.TrackingNumber;
             }
 
-            // Обновляем флаги, если они переданы (в proto они не опциональные, но проверим)
-            // В proto Order нет полей IsPriority и IsLongAssembling, поэтому оставляем как есть
-            // Если нужно будет добавить - нужно обновить proto файл
+            // Обновляем Carrier (название транспортной компании)
+            if (!string.IsNullOrEmpty(request.Order.Carrier))
+            {
+                order.Carrier = request.Order.Carrier;
+            }
+
+            // Обновляем флаги
+            order.IsPriority = request.Order.IsPriority;
+            order.IsLongAssembling = request.Order.IsLongAssembling;
+
+            // Обновляем AssemblerId и DriverId (если переданы)
+            // TODO: Преобразовать FimBiz assembler_id и driver_id в локальные Guid
+            // Это потребует дополнительной таблицы маппинга или синхронизации сотрудников
+            // if (request.Order.HasAssemblerId && request.Order.AssemblerId > 0)
+            // {
+            //     order.AssemblerId = await MapFimBizEmployeeIdToLocalGuid(request.Order.AssemblerId);
+            // }
+            //
+            // if (request.Order.HasDriverId && request.Order.DriverId > 0)
+            // {
+            //     order.DriverId = await MapFimBizEmployeeIdToLocalGuid(request.Order.DriverId);
+            // }
+
+            // Обновляем даты событий (если переданы)
+            if (request.Order.HasAssembledAt && request.Order.AssembledAt > 0)
+            {
+                order.AssembledAt = DateTimeOffset.FromUnixTimeSeconds(request.Order.AssembledAt).UtcDateTime;
+            }
+
+            if (request.Order.HasShippedAt && request.Order.ShippedAt > 0)
+            {
+                order.ShippedAt = DateTimeOffset.FromUnixTimeSeconds(request.Order.ShippedAt).UtcDateTime;
+            }
+
+            if (request.Order.HasDeliveredAt && request.Order.DeliveredAt > 0)
+            {
+                order.DeliveredAt = DateTimeOffset.FromUnixTimeSeconds(request.Order.DeliveredAt).UtcDateTime;
+            }
 
             // Обрабатываем bill_info (счет)
             if (request.Order.BillInfo != null)
@@ -388,6 +452,13 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 || oldTrackingNumber != order.TrackingNumber
                 || oldOrderNumber != order.OrderNumber
                 || oldFimBizOrderId != order.FimBizOrderId
+                || oldDeliveryType != order.DeliveryType
+                || oldCarrier != order.Carrier
+                || oldIsPriority != order.IsPriority
+                || oldIsLongAssembling != order.IsLongAssembling
+                || oldAssembledAt != order.AssembledAt
+                || oldShippedAt != order.ShippedAt
+                || oldDeliveredAt != order.DeliveredAt
                 || request.Order.BillInfo != null
                 || request.Order.UpdInfo != null
                 || (request.Order.Items != null && request.Order.Items.Count > 0);
@@ -759,6 +830,20 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             GrpcOrderStatus.AwaitingPickup => OrderStatus.AwaitingPickup,
             GrpcOrderStatus.Completed => OrderStatus.Received,
             _ => OrderStatus.Processing // По умолчанию
+        };
+    }
+
+    /// <summary>
+    /// Преобразование типа доставки из gRPC в локальный enum
+    /// </summary>
+    private static LocalDeliveryType MapGrpcDeliveryTypeToLocal(GrpcDeliveryType grpcDeliveryType)
+    {
+        return grpcDeliveryType switch
+        {
+            GrpcDeliveryType.SelfPickup => LocalDeliveryType.Pickup,
+            GrpcDeliveryType.CompanyDelivery => LocalDeliveryType.SellerDelivery,
+            GrpcDeliveryType.TransportCompany => LocalDeliveryType.Carrier,
+            _ => LocalDeliveryType.Pickup // По умолчанию самовывоз
         };
     }
 }

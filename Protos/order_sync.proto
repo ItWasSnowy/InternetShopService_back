@@ -87,6 +87,14 @@ message Order {
   optional TransferDocumentInfo upd_info = 13;
   int64 created_at = 14;                 // Unix timestamp
   int64 status_changed_at = 15;
+  optional string carrier = 16;          // Название транспортной компании
+  bool is_priority = 17;                 // Приоритетный заказ
+  bool is_long_assembling = 18;          // Флаг долгой сборки
+  optional int32 assembler_id = 19;     // ID сборщика (если назначен)
+  optional int32 driver_id = 20;         // ID водителя (если назначен)
+  optional int64 assembled_at = 21;      // Unix timestamp сборки
+  optional int64 shipped_at = 22;        // Unix timestamp отправки
+  optional int64 delivered_at = 23;      // Unix timestamp доставки
 }
 
 // Позиция заказа
