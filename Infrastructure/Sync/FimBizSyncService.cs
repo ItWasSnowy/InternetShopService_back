@@ -196,19 +196,33 @@ public class FimBizSyncService : BackgroundService
 
                 using var call = grpcClient.SubscribeToChanges(subscribeRequest);
                 
+                _logger.LogInformation("=== [CONTRACTOR] ПОДПИСКА АКТИВНА, ОЖИДАЕМ ИЗМЕНЕНИЯ ===");
+                
                 await foreach (var change in call.ResponseStream.ReadAllAsync(cancellationToken))
                 {
+                    _logger.LogInformation("=== [CONTRACTOR] ПОЛУЧЕН СТРИМ ИЗМЕНЕНИЙ ===");
                     await ProcessContractorChangeAsync(change, counterpartyRepository, dbContext, cancellationToken);
                 }
+                
+                _logger.LogWarning("=== [CONTRACTOR] СТРИМ ЗАВЕРШЕН (подписка прервана) ===");
             }
             catch (RpcException ex) when (ex.StatusCode == StatusCode.Cancelled)
             {
                 _logger.LogInformation("Подписка для магазина {ShopName} отменена", shop.Name);
                 break;
             }
+            catch (RpcException ex)
+            {
+                _logger.LogError(ex, "=== [CONTRACTOR] ОШИБКА gRPC ПРИ ПОДПИСКЕ ===");
+                _logger.LogError("StatusCode: {StatusCode}, Detail: {Detail}, Message: {Message}", 
+                    ex.StatusCode, ex.Status.Detail, ex.Message);
+                _logger.LogError("Ошибка в подписке на изменения для магазина {ShopName}. Переподключение через 30 секунд...", shop.Name);
+                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+            }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка в подписке на изменения для магазина {ShopName}. Переподключение через 30 секунд...", shop.Name);
+                _logger.LogError(ex, "=== [CONTRACTOR] НЕОЖИДАННАЯ ОШИБКА ПРИ ПОДПИСКЕ ===");
+                _logger.LogError("Ошибка в подписке на изменения для магазина {ShopName}. Переподключение через 30 секунд...", shop.Name);
                 await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
             }
         }
@@ -220,6 +234,14 @@ public class FimBizSyncService : BackgroundService
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        // ===== ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ =====
+        _logger.LogInformation("=== [CONTRACTOR] ПОЛУЧЕНО ИЗМЕНЕНИЕ ОТ FIMBIZ ===");
+        _logger.LogInformation("ChangeType: {ChangeType}", change.ChangeType);
+        _logger.LogInformation("ContractorId: {ContractorId}", change.Contractor?.ContractorId ?? 0);
+        _logger.LogInformation("Contractor.Name: {Name}", change.Contractor?.Name ?? "NULL");
+        _logger.LogInformation("HasSessionControl: {HasSessionControl}", change.SessionControl != null);
+        // ===== КОНЕЦ ДИАГНОСТИЧЕСКОГО ЛОГИРОВАНИЯ =====
+
         try
         {
             // Обработка управления сессиями (если есть)

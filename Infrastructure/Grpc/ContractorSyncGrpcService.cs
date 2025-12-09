@@ -35,6 +35,12 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
         GetActiveSessionsRequest request,
         ServerCallContext context)
     {
+        // ===== ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ =====
+        _logger.LogInformation("=== [CONTRACTOR] ВХОДЯЩИЙ ЗАПРОС GetActiveSessions ===");
+        _logger.LogInformation("RemoteAddress: {RemoteAddress}", context.Peer);
+        _logger.LogInformation("Request.ContractorId: {ContractorId}", request?.ContractorId);
+        // ===== КОНЕЦ ДИАГНОСТИЧЕСКОГО ЛОГИРОВАНИЯ =====
+
         try
         {
             // Проверка API ключа
@@ -75,6 +81,13 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
         ExecuteSessionControlRequest request,
         ServerCallContext context)
     {
+        // ===== ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ =====
+        _logger.LogInformation("=== [CONTRACTOR] ВХОДЯЩИЙ ЗАПРОС ExecuteSessionControl ===");
+        _logger.LogInformation("RemoteAddress: {RemoteAddress}", context.Peer);
+        _logger.LogInformation("Request.SessionControl.ContractorId: {ContractorId}", request?.SessionControl?.ContractorId ?? 0);
+        _logger.LogInformation("Request.SessionControl.Action: {Action}", request?.SessionControl?.Action);
+        // ===== КОНЕЦ ДИАГНОСТИЧЕСКОГО ЛОГИРОВАНИЯ =====
+
         try
         {
             // Проверка API ключа

@@ -1,3 +1,4 @@
+using System.Linq;
 using Grpc.Core;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
@@ -44,16 +45,50 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         NotifyOrderStatusChangeRequest request,
         ServerCallContext context)
     {
+        // ===== ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ В САМОМ НАЧАЛЕ =====
+        _logger.LogInformation("=== [ORDER] ВХОДЯЩИЙ ЗАПРОС NotifyOrderStatusChange ===");
+        _logger.LogInformation("RemoteAddress: {RemoteAddress}", context.Peer);
+        _logger.LogInformation("Host: {Host}", context.RequestHeaders.GetValue("host"));
+        _logger.LogInformation("User-Agent: {UserAgent}", context.RequestHeaders.GetValue("user-agent"));
+        _logger.LogInformation("Content-Type: {ContentType}", context.RequestHeaders.GetValue("content-type"));
+        
+        var allHeaders = string.Join(", ", context.RequestHeaders.Select(h => $"{h.Key}={h.Value}"));
+        _logger.LogInformation("Все заголовки: {Headers}", allHeaders);
+        
+        if (request != null)
+        {
+            _logger.LogInformation("Request.ExternalOrderId: {ExternalOrderId}", request.ExternalOrderId);
+            _logger.LogInformation("Request.FimBizOrderId: {FimBizOrderId}", request.FimBizOrderId);
+            _logger.LogInformation("Request.NewStatus: {NewStatus}", request.NewStatus);
+            _logger.LogInformation("Request.IsPriority: {IsPriority}", request.IsPriority);
+            _logger.LogInformation("Request.IsLongAssembling: {IsLongAssembling}", request.IsLongAssembling);
+            _logger.LogInformation("Request.HasBillInfo: {HasBillInfo}", request.BillInfo != null);
+            _logger.LogInformation("Request.HasUpdInfo: {HasUpdInfo}", request.UpdInfo != null);
+        }
+        else
+        {
+            _logger.LogWarning("Request is NULL!");
+        }
+        // ===== КОНЕЦ ДИАГНОСТИЧЕСКОГО ЛОГИРОВАНИЯ =====
+
         try
         {
             // Проверка API ключа
             var apiKey = context.RequestHeaders.GetValue("x-api-key");
             var expectedApiKey = _configuration["FimBiz:ApiKey"];
             
+            _logger.LogInformation("API ключ из запроса: {ApiKey} (первые 10 символов)", 
+                string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...");
+            _logger.LogInformation("Ожидаемый API ключ: {ExpectedApiKey} (первые 10 символов)", 
+                expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
+            
             if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
             {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при обновлении статуса заказа {ExternalOrderId}", 
-                    request.ExternalOrderId);
+                _logger.LogWarning("Неверный или отсутствующий API ключ при обновлении статуса заказа {ExternalOrderId}. " +
+                    "Получен: {ReceivedKey}, Ожидается: {ExpectedKey}", 
+                    request?.ExternalOrderId, 
+                    string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...",
+                    expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
                 throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
             }
 
@@ -211,16 +246,56 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         NotifyOrderUpdateRequest request,
         ServerCallContext context)
     {
+        // ===== ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ В САМОМ НАЧАЛЕ =====
+        _logger.LogInformation("=== [ORDER] ВХОДЯЩИЙ ЗАПРОС NotifyOrderUpdate ===");
+        _logger.LogInformation("RemoteAddress: {RemoteAddress}", context.Peer);
+        _logger.LogInformation("Host: {Host}", context.RequestHeaders.GetValue("host"));
+        _logger.LogInformation("User-Agent: {UserAgent}", context.RequestHeaders.GetValue("user-agent"));
+        _logger.LogInformation("Content-Type: {ContentType}", context.RequestHeaders.GetValue("content-type"));
+        
+        var allHeaders = string.Join(", ", context.RequestHeaders.Select(h => $"{h.Key}={h.Value}"));
+        _logger.LogInformation("Все заголовки: {Headers}", allHeaders);
+        
+        if (request != null)
+        {
+            if (request.Order != null)
+            {
+                _logger.LogInformation("Request.Order.ExternalOrderId: {ExternalOrderId}", request.Order.ExternalOrderId);
+                _logger.LogInformation("Request.Order.OrderId (FimBiz): {OrderId}", request.Order.OrderId);
+                _logger.LogInformation("Request.Order.Status: {Status}", request.Order.Status);
+                _logger.LogInformation("Request.Order.HasBillInfo: {HasBillInfo}", request.Order.BillInfo != null);
+                _logger.LogInformation("Request.Order.HasUpdInfo: {HasUpdInfo}", request.Order.UpdInfo != null);
+                _logger.LogInformation("Request.Order.Items.Count: {ItemsCount}", request.Order.Items?.Count ?? 0);
+            }
+            else
+            {
+                _logger.LogWarning("Request.Order is NULL!");
+            }
+        }
+        else
+        {
+            _logger.LogWarning("Request is NULL!");
+        }
+        // ===== КОНЕЦ ДИАГНОСТИЧЕСКОГО ЛОГИРОВАНИЯ =====
+
         try
         {
             // Проверка API ключа
             var apiKey = context.RequestHeaders.GetValue("x-api-key");
             var expectedApiKey = _configuration["FimBiz:ApiKey"];
             
+            _logger.LogInformation("API ключ из запроса: {ApiKey} (первые 10 символов)", 
+                string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...");
+            _logger.LogInformation("Ожидаемый API ключ: {ExpectedApiKey} (первые 10 символов)", 
+                expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
+            
             if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
             {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при обновлении заказа {ExternalOrderId}", 
-                    request.Order?.ExternalOrderId);
+                _logger.LogWarning("Неверный или отсутствующий API ключ при обновлении заказа {ExternalOrderId}. " +
+                    "Получен: {ReceivedKey}, Ожидается: {ExpectedKey}", 
+                    request?.Order?.ExternalOrderId,
+                    string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...",
+                    expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
                 throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
             }
 
@@ -375,16 +450,46 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         NotifyOrderDeleteRequest request,
         ServerCallContext context)
     {
+        // ===== ДИАГНОСТИЧЕСКОЕ ЛОГИРОВАНИЕ В САМОМ НАЧАЛЕ =====
+        _logger.LogInformation("=== [ORDER] ВХОДЯЩИЙ ЗАПРОС NotifyOrderDelete ===");
+        _logger.LogInformation("RemoteAddress: {RemoteAddress}", context.Peer);
+        _logger.LogInformation("Host: {Host}", context.RequestHeaders.GetValue("host"));
+        _logger.LogInformation("User-Agent: {UserAgent}", context.RequestHeaders.GetValue("user-agent"));
+        _logger.LogInformation("Content-Type: {ContentType}", context.RequestHeaders.GetValue("content-type"));
+        
+        var allHeaders = string.Join(", ", context.RequestHeaders.Select(h => $"{h.Key}={h.Value}"));
+        _logger.LogInformation("Все заголовки: {Headers}", allHeaders);
+        
+        if (request != null)
+        {
+            _logger.LogInformation("Request.ExternalOrderId: {ExternalOrderId}", request.ExternalOrderId);
+            _logger.LogInformation("Request.FimBizOrderId: {FimBizOrderId}", request.FimBizOrderId);
+            _logger.LogInformation("Request.Reason: {Reason}", request.Reason ?? "не указана");
+        }
+        else
+        {
+            _logger.LogWarning("Request is NULL!");
+        }
+        // ===== КОНЕЦ ДИАГНОСТИЧЕСКОГО ЛОГИРОВАНИЯ =====
+
         try
         {
             // Проверка API ключа
             var apiKey = context.RequestHeaders.GetValue("x-api-key");
             var expectedApiKey = _configuration["FimBiz:ApiKey"];
             
+            _logger.LogInformation("API ключ из запроса: {ApiKey} (первые 10 символов)", 
+                string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...");
+            _logger.LogInformation("Ожидаемый API ключ: {ExpectedApiKey} (первые 10 символов)", 
+                expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
+            
             if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
             {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при удалении заказа {ExternalOrderId}", 
-                    request.ExternalOrderId);
+                _logger.LogWarning("Неверный или отсутствующий API ключ при удалении заказа {ExternalOrderId}. " +
+                    "Получен: {ReceivedKey}, Ожидается: {ExpectedKey}", 
+                    request?.ExternalOrderId,
+                    string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...",
+                    expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
                 throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
             }
 
