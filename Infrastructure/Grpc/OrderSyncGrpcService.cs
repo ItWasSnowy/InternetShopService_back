@@ -134,11 +134,18 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             var oldIsPriority = order.IsPriority;
             var oldIsLongAssembling = order.IsLongAssembling;
             var oldFimBizOrderId = order.FimBizOrderId;
+            var oldCarrier = order.Carrier;
+            var oldAssembledAt = order.AssembledAt;
+            var oldShippedAt = order.ShippedAt;
+            var oldDeliveredAt = order.DeliveredAt;
             
-            // Обновляем заказ
+            // Обновляем статус заказа (ВСЕГДА обновляем, даже если статус не изменился)
             order.Status = newStatus;
             order.FimBizOrderId = request.FimBizOrderId;
             order.UpdatedAt = DateTime.UtcNow;
+
+            _logger.LogInformation("Обновление статуса заказа {OrderId} с {OldStatus} на {NewStatus} (FimBiz: {GrpcStatus})", 
+                orderId, oldStatus, newStatus, request.NewStatus);
 
             // Обновляем дополнительные поля, если они переданы
             if (request.HasModifiedPrice)
@@ -146,14 +153,51 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 order.TotalAmount = (decimal)request.ModifiedPrice / 100; // Из копеек в рубли
             }
 
-            if (!string.IsNullOrEmpty(request.TrackingNumber))
+            // Обновляем TrackingNumber (обновляем всегда, даже если пустой, чтобы очистить старое значение)
+            order.TrackingNumber = string.IsNullOrEmpty(request.TrackingNumber) ? null : request.TrackingNumber;
+
+            // Обновляем Carrier (обновляем всегда, даже если пустой, чтобы очистить старое значение)
+            order.Carrier = string.IsNullOrEmpty(request.Carrier) ? null : request.Carrier;
+            if (oldCarrier != order.Carrier)
             {
-                order.TrackingNumber = request.TrackingNumber;
+                _logger.LogInformation("Обновлен Carrier заказа {OrderId} с '{OldCarrier}' на '{NewCarrier}'", 
+                    orderId, oldCarrier ?? "null", order.Carrier ?? "null");
             }
 
             // Обновляем флаги
             order.IsPriority = request.IsPriority;
             order.IsLongAssembling = request.IsLongAssembling;
+
+            // Обновляем даты событий (если переданы)
+            if (request.HasAssembledAt && request.AssembledAt > 0)
+            {
+                order.AssembledAt = DateTimeOffset.FromUnixTimeSeconds(request.AssembledAt).UtcDateTime;
+                if (oldAssembledAt != order.AssembledAt)
+                {
+                    _logger.LogInformation("Обновлен AssembledAt заказа {OrderId} на {AssembledAt}", 
+                        orderId, order.AssembledAt);
+                }
+            }
+
+            if (request.HasShippedAt && request.ShippedAt > 0)
+            {
+                order.ShippedAt = DateTimeOffset.FromUnixTimeSeconds(request.ShippedAt).UtcDateTime;
+                if (oldShippedAt != order.ShippedAt)
+                {
+                    _logger.LogInformation("Обновлен ShippedAt заказа {OrderId} на {ShippedAt}", 
+                        orderId, order.ShippedAt);
+                }
+            }
+
+            if (request.HasDeliveredAt && request.DeliveredAt > 0)
+            {
+                order.DeliveredAt = DateTimeOffset.FromUnixTimeSeconds(request.DeliveredAt).UtcDateTime;
+                if (oldDeliveredAt != order.DeliveredAt)
+                {
+                    _logger.LogInformation("Обновлен DeliveredAt заказа {OrderId} на {DeliveredAt}", 
+                        orderId, order.DeliveredAt);
+                }
+            }
 
             // Обрабатываем bill_info (счет)
             if (request.BillInfo != null)
@@ -180,24 +224,23 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // }
 
             // Проверяем, были ли реальные изменения
+            // ВАЖНО: Статус всегда обновляется, даже если он не изменился, т.к. это уведомление от FimBiz
             bool hasChanges = oldStatus != newStatus
                 || oldTotalAmount != order.TotalAmount
                 || oldTrackingNumber != order.TrackingNumber
                 || oldIsPriority != order.IsPriority
                 || oldIsLongAssembling != order.IsLongAssembling
                 || oldFimBizOrderId != order.FimBizOrderId
+                || oldCarrier != order.Carrier
+                || oldAssembledAt != order.AssembledAt
+                || oldShippedAt != order.ShippedAt
+                || oldDeliveredAt != order.DeliveredAt
                 || request.BillInfo != null
                 || request.UpdInfo != null;
 
-            if (!hasChanges)
-            {
-                _logger.LogDebug("Заказ {OrderId} не изменился, пропускаем обновление", orderId);
-                return new NotifyOrderStatusChangeResponse
-                {
-                    Success = true,
-                    Message = "Заказ не изменился"
-                };
-            }
+            // ВАЖНО: Всегда сохраняем изменения, даже если статус не изменился,
+            // т.к. это уведомление от FimBiz и мы должны синхронизировать данные
+            // if (!hasChanges) - УДАЛЕНО: всегда сохраняем изменения
 
             // Добавляем запись в историю статусов только если статус изменился
             if (oldStatus != newStatus)
@@ -213,15 +256,22 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                         : DateTime.UtcNow
                 };
                 order.StatusHistory.Add(statusHistory);
+                _logger.LogInformation("Добавлена запись в историю статусов для заказа {OrderId}: {OldStatus} -> {NewStatus}", 
+                    orderId, oldStatus, newStatus);
+            }
+            else
+            {
+                _logger.LogInformation("Статус заказа {OrderId} не изменился ({Status}), но другие поля могут быть обновлены", 
+                    orderId, newStatus);
             }
 
             order.SyncedWithFimBizAt = DateTime.UtcNow;
 
-            // Сохраняем изменения
+            // Сохраняем изменения (ВСЕГДА сохраняем, даже если статус не изменился, т.к. могут быть другие изменения)
             await _orderRepository.UpdateAsync(order);
 
-            _logger.LogInformation("Статус заказа {OrderId} успешно обновлен с {OldStatus} на {NewStatus}", 
-                orderId, oldStatus, newStatus);
+            _logger.LogInformation("Заказ {OrderId} успешно обновлен. Статус: {OldStatus} -> {NewStatus}, FimBizOrderId: {FimBizOrderId}", 
+                orderId, oldStatus, newStatus, order.FimBizOrderId);
 
             return new NotifyOrderStatusChangeResponse
             {
