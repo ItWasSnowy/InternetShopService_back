@@ -2,6 +2,9 @@ using Grpc.Core;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Contractors;
+using InternetShopService_back.Infrastructure.Grpc.Orders;
+using InternetShopService_back.Modules.OrderManagement.Models;
+using InternetShopService_back.Modules.OrderManagement.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Shared.Repositories;
@@ -9,6 +12,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OrderStatus = InternetShopService_back.Modules.OrderManagement.Models.OrderStatus;
+using GrpcOrderStatus = InternetShopService_back.Infrastructure.Grpc.Orders.OrderStatus;
+using GrpcDeliveryType = InternetShopService_back.Infrastructure.Grpc.Orders.DeliveryType;
+using LocalDeliveryType = InternetShopService_back.Modules.OrderManagement.Models.DeliveryType;
+using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order;
+using LocalOrderItem = InternetShopService_back.Modules.OrderManagement.Models.OrderItem;
+using GrpcOrder = InternetShopService_back.Infrastructure.Grpc.Orders.Order;
+using GrpcOrderItem = InternetShopService_back.Infrastructure.Grpc.Orders.OrderItem;
 
 namespace InternetShopService_back.Infrastructure.Sync;
 
@@ -43,8 +54,14 @@ public class FimBizSyncService : BackgroundService
         // Сначала выполняем полную синхронизацию
         await PerformFullSyncAsync(stoppingToken);
 
-        // Затем подписываемся на изменения
-        await SubscribeToChangesAsync(stoppingToken);
+        // Запускаем периодическую синхронизацию заказов
+        var syncOrdersTask = SyncOrdersPeriodicallyAsync(stoppingToken);
+
+        // Затем подписываемся на изменения контрагентов
+        var subscribeTask = SubscribeToChangesAsync(stoppingToken);
+
+        // Ждем завершения обеих задач
+        await Task.WhenAll(syncOrdersTask, subscribeTask);
     }
 
     private async Task PerformFullSyncAsync(CancellationToken cancellationToken)
@@ -631,6 +648,338 @@ public class FimBizSyncService : BackgroundService
             _logger.LogInformation("Деактивировано {Count} активных сессий для контрагента {CounterpartyId}", 
                 activeSessions.Count, counterpartyId);
         }
+    }
+
+    /// <summary>
+    /// Периодическая синхронизация заказов с FimBiz
+    /// </summary>
+    private async Task SyncOrdersPeriodicallyAsync(CancellationToken cancellationToken)
+    {
+        var syncIntervalMinutes = _configuration.GetValue<int>("FimBiz:SyncIntervalMinutes", 60);
+        var syncInterval = TimeSpan.FromMinutes(syncIntervalMinutes);
+
+        _logger.LogInformation("Запущена периодическая синхронизация заказов. Интервал: {IntervalMinutes} минут", syncIntervalMinutes);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(syncInterval, cancellationToken);
+
+                _logger.LogInformation("Начало периодической синхронизации заказов");
+
+                using var scope = _serviceProvider.CreateScope();
+                var grpcClient = scope.ServiceProvider.GetRequiredService<IFimBizGrpcClient>();
+                var orderRepository = scope.ServiceProvider.GetRequiredService<IOrderRepository>();
+                var shopRepository = scope.ServiceProvider.GetRequiredService<IShopRepository>();
+                var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+                // Получаем все активные магазины
+                var activeShops = await shopRepository.GetAllActiveAsync();
+
+                if (!activeShops.Any())
+                {
+                    _logger.LogWarning("Не найдено активных магазинов для синхронизации заказов");
+                    continue;
+                }
+
+                int totalSyncedCount = 0;
+
+                // Синхронизируем заказы для каждого магазина
+                foreach (var shop in activeShops)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        break;
+
+                    try
+                    {
+                        // Получаем заказы, которые синхронизированы с FimBiz (имеют FimBizOrderId)
+                        var syncedOrders = await dbContext.Orders
+                            .Where(o => o.FimBizOrderId.HasValue && o.FimBizOrderId.Value > 0)
+                            .OrderByDescending(o => o.UpdatedAt)
+                            .Take(100) // Синхронизируем последние 100 заказов
+                            .ToListAsync(cancellationToken);
+
+                        _logger.LogInformation("Найдено {Count} заказов для синхронизации для магазина {ShopName}", 
+                            syncedOrders.Count, shop.Name);
+
+                        foreach (var order in syncedOrders)
+                        {
+                            if (cancellationToken.IsCancellationRequested)
+                                break;
+
+                            try
+                            {
+                                await SyncOrderFromFimBizAsync(order, shop, grpcClient, orderRepository, dbContext, cancellationToken);
+                                totalSyncedCount++;
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Ошибка при синхронизации заказа {OrderId} из FimBiz", order.Id);
+                                // Продолжаем синхронизацию других заказов
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Ошибка при синхронизации заказов для магазина {ShopName}", shop.Name);
+                    }
+                }
+
+                _logger.LogInformation("Периодическая синхронизация заказов завершена. Синхронизировано заказов: {Count}", totalSyncedCount);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Периодическая синхронизация заказов отменена");
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка в периодической синхронизации заказов. Повтор через {IntervalMinutes} минут", syncIntervalMinutes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Синхронизация одного заказа из FimBiz
+    /// </summary>
+    private async Task SyncOrderFromFimBizAsync(
+        LocalOrder localOrder,
+        Shop shop,
+        IFimBizGrpcClient grpcClient,
+        IOrderRepository orderRepository,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (!localOrder.FimBizOrderId.HasValue)
+        {
+            return; // Заказ еще не синхронизирован с FimBiz
+        }
+
+        try
+        {
+            // Получаем заказ из FimBiz
+            var getOrderRequest = new GetOrderRequest
+            {
+                ExternalOrderId = localOrder.Id.ToString(),
+                CompanyId = shop.FimBizCompanyId
+            };
+
+            var grpcOrder = await grpcClient.GetOrderAsync(getOrderRequest);
+
+            if (grpcOrder == null!)
+            {
+                _logger.LogWarning("Заказ {OrderId} не найден в FimBiz", localOrder.Id);
+                return;
+            }
+
+            // Сохраняем старые значения для проверки изменений
+            var oldStatus = localOrder.Status;
+            var oldTotalAmount = localOrder.TotalAmount;
+            var oldTrackingNumber = localOrder.TrackingNumber;
+            var oldOrderNumber = localOrder.OrderNumber;
+            var oldDeliveryType = localOrder.DeliveryType;
+            var oldCarrier = localOrder.Carrier;
+            var oldIsPriority = localOrder.IsPriority;
+            var oldIsLongAssembling = localOrder.IsLongAssembling;
+
+            // Обновляем поля заказа из FimBiz
+            localOrder.FimBizOrderId = grpcOrder.OrderId;
+            localOrder.OrderNumber = grpcOrder.OrderNumber;
+            localOrder.Status = MapGrpcStatusToLocal(grpcOrder.Status);
+            localOrder.TotalAmount = (decimal)grpcOrder.TotalPrice / 100; // Из копеек в рубли
+
+            // Обновляем DeliveryType
+            var newDeliveryType = MapGrpcDeliveryTypeToLocal(grpcOrder.DeliveryType);
+            if (oldDeliveryType != newDeliveryType)
+            {
+                _logger.LogInformation("Синхронизация: обновлен DeliveryType заказа {OrderId} с {OldDeliveryType} на {NewDeliveryType}", 
+                    localOrder.Id, oldDeliveryType, newDeliveryType);
+            }
+            localOrder.DeliveryType = newDeliveryType;
+
+            if (grpcOrder.HasModifiedPrice)
+            {
+                localOrder.TotalAmount = (decimal)grpcOrder.ModifiedPrice / 100;
+            }
+
+            // Обновляем TrackingNumber
+            localOrder.TrackingNumber = string.IsNullOrEmpty(grpcOrder.TrackingNumber) ? null : grpcOrder.TrackingNumber;
+
+            // Обновляем Carrier
+            localOrder.Carrier = string.IsNullOrEmpty(grpcOrder.Carrier) ? null : grpcOrder.Carrier;
+
+            // Обновляем флаги
+            localOrder.IsPriority = grpcOrder.IsPriority;
+            localOrder.IsLongAssembling = grpcOrder.IsLongAssembling;
+
+            // Обновляем даты событий (если переданы)
+            if (grpcOrder.HasAssembledAt && grpcOrder.AssembledAt > 0)
+            {
+                localOrder.AssembledAt = DateTimeOffset.FromUnixTimeSeconds(grpcOrder.AssembledAt).UtcDateTime;
+            }
+
+            if (grpcOrder.HasShippedAt && grpcOrder.ShippedAt > 0)
+            {
+                localOrder.ShippedAt = DateTimeOffset.FromUnixTimeSeconds(grpcOrder.ShippedAt).UtcDateTime;
+            }
+
+            if (grpcOrder.HasDeliveredAt && grpcOrder.DeliveredAt > 0)
+            {
+                localOrder.DeliveredAt = DateTimeOffset.FromUnixTimeSeconds(grpcOrder.DeliveredAt).UtcDateTime;
+            }
+
+            // Проверяем, были ли реальные изменения
+            bool hasChanges = oldStatus != localOrder.Status
+                || oldTotalAmount != localOrder.TotalAmount
+                || oldTrackingNumber != localOrder.TrackingNumber
+                || oldOrderNumber != localOrder.OrderNumber
+                || oldDeliveryType != localOrder.DeliveryType
+                || oldCarrier != localOrder.Carrier
+                || oldIsPriority != localOrder.IsPriority
+                || oldIsLongAssembling != localOrder.IsLongAssembling
+                || grpcOrder.Items != null && grpcOrder.Items.Count > 0;
+
+            if (hasChanges)
+            {
+                localOrder.SyncedWithFimBizAt = DateTime.UtcNow;
+                localOrder.UpdatedAt = DateTime.UtcNow;
+
+                // Добавляем запись в историю статусов только если статус изменился
+                if (oldStatus != localOrder.Status)
+                {
+                    var statusHistory = new OrderStatusHistory
+                    {
+                        Id = Guid.NewGuid(),
+                        OrderId = localOrder.Id,
+                        Status = localOrder.Status,
+                        ChangedAt = grpcOrder.StatusChangedAt > 0 
+                            ? DateTimeOffset.FromUnixTimeSeconds(grpcOrder.StatusChangedAt).UtcDateTime 
+                            : DateTime.UtcNow
+                    };
+                    localOrder.StatusHistory.Add(statusHistory);
+                }
+
+                // Синхронизируем позиции заказа, если они переданы
+                if (grpcOrder.Items != null && grpcOrder.Items.Count > 0)
+                {
+                    await SyncOrderItemsAsync(localOrder, grpcOrder.Items, dbContext, cancellationToken);
+                }
+
+                await orderRepository.UpdateAsync(localOrder);
+
+                _logger.LogInformation("Заказ {OrderId} успешно синхронизирован с FimBiz", localOrder.Id);
+            }
+            else
+            {
+                _logger.LogDebug("Заказ {OrderId} не изменился, пропускаем обновление", localOrder.Id);
+            }
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
+        {
+            _logger.LogWarning("Заказ {OrderId} не найден в FimBiz (404)", localOrder.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при синхронизации заказа {OrderId} из FimBiz", localOrder.Id);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Синхронизация позиций заказа
+    /// </summary>
+    private async Task SyncOrderItemsAsync(
+        LocalOrder order,
+        IEnumerable<GrpcOrderItem> grpcItems,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Удаляем старые позиции
+            var existingItems = await dbContext.OrderItems
+                .Where(i => i.OrderId == order.Id)
+                .ToListAsync(cancellationToken);
+
+            dbContext.OrderItems.RemoveRange(existingItems);
+
+            // Добавляем новые позиции из FimBiz
+            foreach (var grpcItem in grpcItems)
+            {
+                var orderItem = new LocalOrderItem
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = order.Id,
+                    NomenclatureId = grpcItem.HasNomenclatureId && grpcItem.NomenclatureId > 0
+                        ? ConvertInt32ToGuid(grpcItem.NomenclatureId)
+                        : Guid.NewGuid(), // Генерируем новый GUID если нет NomenclatureId
+                    NomenclatureName = grpcItem.Name,
+                    Quantity = grpcItem.Quantity,
+                    Price = (decimal)grpcItem.Price / 100, // Из копеек в рубли
+                    DiscountPercent = 0, // TODO: получить из FimBiz если доступно
+                    TotalAmount = (decimal)grpcItem.Price / 100 * grpcItem.Quantity,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                await dbContext.OrderItems.AddAsync(orderItem, cancellationToken);
+            }
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation("Синхронизировано {Count} позиций для заказа {OrderId}", 
+                grpcItems.Count(), order.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при синхронизации позиций заказа {OrderId}", order.Id);
+            // Не прерываем выполнение, просто логируем ошибку
+        }
+    }
+
+    /// <summary>
+    /// Преобразование int32 в Guid (для обратной совместимости с FimBiz ID)
+    /// </summary>
+    private static Guid ConvertInt32ToGuid(int value)
+    {
+        var bytes = new byte[16];
+        BitConverter.GetBytes(value).CopyTo(bytes, 0);
+        return new Guid(bytes);
+    }
+
+    /// <summary>
+    /// Преобразование статуса из gRPC в локальный enum
+    /// </summary>
+    private static OrderStatus MapGrpcStatusToLocal(GrpcOrderStatus grpcStatus)
+    {
+        return grpcStatus switch
+        {
+            GrpcOrderStatus.Processing => OrderStatus.Processing,
+            GrpcOrderStatus.WaitingForPayment => OrderStatus.AwaitingPayment,
+            GrpcOrderStatus.BillConfirmed => OrderStatus.InvoiceConfirmed,
+            GrpcOrderStatus.Manufacturing => OrderStatus.Manufacturing,
+            GrpcOrderStatus.Picking => OrderStatus.Assembling,
+            GrpcOrderStatus.TransferredToTransport => OrderStatus.TransferredToCarrier,
+            GrpcOrderStatus.DeliveringByTransport => OrderStatus.DeliveringByCarrier,
+            GrpcOrderStatus.Delivering => OrderStatus.Delivering,
+            GrpcOrderStatus.AwaitingPickup => OrderStatus.AwaitingPickup,
+            GrpcOrderStatus.Completed => OrderStatus.Received,
+            _ => OrderStatus.Processing // По умолчанию
+        };
+    }
+
+    /// <summary>
+    /// Преобразование типа доставки из gRPC в локальный enum
+    /// </summary>
+    private static LocalDeliveryType MapGrpcDeliveryTypeToLocal(GrpcDeliveryType grpcDeliveryType)
+    {
+        return grpcDeliveryType switch
+        {
+            GrpcDeliveryType.SelfPickup => LocalDeliveryType.Pickup,
+            GrpcDeliveryType.CompanyDelivery => LocalDeliveryType.SellerDelivery,
+            GrpcDeliveryType.TransportCompany => LocalDeliveryType.Carrier,
+            _ => LocalDeliveryType.Pickup // По умолчанию самовывоз
+        };
     }
 }
 

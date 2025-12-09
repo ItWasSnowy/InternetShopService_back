@@ -367,32 +367,36 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             order.Status = MapGrpcStatusToLocal(request.Order.Status);
             order.TotalAmount = (decimal)request.Order.TotalPrice / 100; // Из копеек в рубли
             
-            // Обновляем DeliveryType, если он указан (проверяем, что не равен 0 - DeliveryTypeUnspecified)
-            if (request.Order.DeliveryType != 0)
+            // Обновляем DeliveryType (всегда обновляем, если приходит значение от FimBiz)
+            var newDeliveryType = MapGrpcDeliveryTypeToLocal(request.Order.DeliveryType);
+            if (oldDeliveryType != newDeliveryType)
             {
-                var newDeliveryType = MapGrpcDeliveryTypeToLocal(request.Order.DeliveryType);
-                if (oldDeliveryType != newDeliveryType)
-                {
-                    _logger.LogInformation("Обновлен DeliveryType заказа {OrderId} с {OldDeliveryType} на {NewDeliveryType}", 
-                        orderId, oldDeliveryType, newDeliveryType);
-                }
-                order.DeliveryType = newDeliveryType;
+                _logger.LogInformation("Обновлен DeliveryType заказа {OrderId} с {OldDeliveryType} ({OldValue}) на {NewDeliveryType} ({NewValue})", 
+                    orderId, oldDeliveryType, (int)oldDeliveryType, newDeliveryType, (int)newDeliveryType);
             }
+            order.DeliveryType = newDeliveryType;
             
             if (request.Order.HasModifiedPrice)
             {
                 order.TotalAmount = (decimal)request.Order.ModifiedPrice / 100;
             }
 
-            if (!string.IsNullOrEmpty(request.Order.TrackingNumber))
+            // Обновляем TrackingNumber (обновляем всегда, даже если пустой, чтобы очистить старое значение)
+            var oldTrackingNumberValue = order.TrackingNumber;
+            order.TrackingNumber = string.IsNullOrEmpty(request.Order.TrackingNumber) ? null : request.Order.TrackingNumber;
+            if (oldTrackingNumberValue != order.TrackingNumber)
             {
-                order.TrackingNumber = request.Order.TrackingNumber;
+                _logger.LogInformation("Обновлен TrackingNumber заказа {OrderId} с '{OldTrackingNumber}' на '{NewTrackingNumber}'", 
+                    orderId, oldTrackingNumberValue ?? "null", order.TrackingNumber ?? "null");
             }
 
-            // Обновляем Carrier (название транспортной компании)
-            if (!string.IsNullOrEmpty(request.Order.Carrier))
+            // Обновляем Carrier (обновляем всегда, даже если пустой, чтобы очистить старое значение)
+            var oldCarrierValue = order.Carrier;
+            order.Carrier = string.IsNullOrEmpty(request.Order.Carrier) ? null : request.Order.Carrier;
+            if (oldCarrierValue != order.Carrier)
             {
-                order.Carrier = request.Order.Carrier;
+                _logger.LogInformation("Обновлен Carrier заказа {OrderId} с '{OldCarrier}' на '{NewCarrier}'", 
+                    orderId, oldCarrierValue ?? "null", order.Carrier ?? "null");
             }
 
             // Обновляем флаги
