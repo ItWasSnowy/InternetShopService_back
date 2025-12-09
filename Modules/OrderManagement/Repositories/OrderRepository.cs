@@ -61,6 +61,23 @@ public class OrderRepository : IOrderRepository
         return order;
     }
 
+    public async Task<bool> DeleteAsync(Guid id)
+    {
+        var order = await _context.Orders
+            .Include(o => o.Items)
+            .Include(o => o.StatusHistory)
+            .Include(o => o.Attachments)
+            .FirstOrDefaultAsync(o => o.Id == id);
+        
+        if (order == null)
+            return false;
+
+        _context.Orders.Remove(order);
+        await _context.SaveChangesAsync();
+        
+        return true;
+    }
+
     public async Task<string> GenerateOrderNumberAsync()
     {
         var today = DateTime.UtcNow.Date;

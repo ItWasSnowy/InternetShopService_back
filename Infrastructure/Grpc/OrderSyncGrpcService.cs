@@ -267,6 +267,85 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     }
 
     /// <summary>
+    /// Обработка уведомления об удалении заказа от FimBiz
+    /// </summary>
+    public override async Task<NotifyOrderDeleteResponse> NotifyOrderDelete(
+        NotifyOrderDeleteRequest request,
+        ServerCallContext context)
+    {
+        try
+        {
+            // Проверка API ключа
+            var apiKey = context.RequestHeaders.GetValue("x-api-key");
+            var expectedApiKey = _configuration["FimBiz:ApiKey"];
+            
+            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
+            {
+                _logger.LogWarning("Неверный или отсутствующий API ключ при удалении заказа {ExternalOrderId}", 
+                    request.ExternalOrderId);
+                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
+            }
+
+            _logger.LogInformation("Получено уведомление об удалении заказа {ExternalOrderId} от FimBiz", 
+                request.ExternalOrderId);
+
+            // Парсим external_order_id как Guid
+            if (!Guid.TryParse(request.ExternalOrderId, out var orderId))
+            {
+                _logger.LogWarning("Неверный формат external_order_id: {ExternalOrderId}", request.ExternalOrderId);
+                return new NotifyOrderDeleteResponse
+                {
+                    Success = false,
+                    Message = "Неверный формат ID заказа"
+                };
+            }
+
+            // Получаем заказ из БД
+            var order = await _orderRepository.GetByIdAsync(orderId);
+            if (order == null)
+            {
+                _logger.LogWarning("Заказ {OrderId} не найден в локальной БД", orderId);
+                return new NotifyOrderDeleteResponse
+                {
+                    Success = false,
+                    Message = "Заказ не найден"
+                };
+            }
+
+            // Удаляем заказ
+            var deleted = await _orderRepository.DeleteAsync(orderId);
+            if (!deleted)
+            {
+                _logger.LogWarning("Не удалось удалить заказ {OrderId}", orderId);
+                return new NotifyOrderDeleteResponse
+                {
+                    Success = false,
+                    Message = "Не удалось удалить заказ"
+                };
+            }
+
+            _logger.LogInformation("Заказ {OrderId} успешно удален по уведомлению от FimBiz. Причина: {Reason}", 
+                orderId, request.Reason ?? "не указана");
+
+            return new NotifyOrderDeleteResponse
+            {
+                Success = true,
+                Message = "Заказ успешно удален"
+            };
+        }
+        catch (RpcException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при обработке уведомления об удалении заказа {ExternalOrderId}", 
+                request.ExternalOrderId);
+            throw new RpcException(new Status(StatusCode.Internal, "Internal server error"));
+        }
+    }
+
+    /// <summary>
     /// Преобразование статуса из gRPC в локальный enum
     /// </summary>
     private static OrderStatus MapGrpcStatusToLocal(GrpcOrderStatus grpcStatus)

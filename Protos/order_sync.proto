@@ -23,6 +23,9 @@ service OrderSyncServerService {
   
   // Уведомление об обновлении заказа от FimBiz
   rpc NotifyOrderUpdate (NotifyOrderUpdateRequest) returns (NotifyOrderUpdateResponse);
+  
+  // Уведомление об удалении заказа от FimBiz
+  rpc NotifyOrderDelete (NotifyOrderDeleteRequest) returns (NotifyOrderDeleteResponse);
 }
 
 // Запрос создания заказа
@@ -174,6 +177,19 @@ message NotifyOrderUpdateRequest {
 
 // Ответ на уведомление об обновлении
 message NotifyOrderUpdateResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Запрос уведомления об удалении заказа
+message NotifyOrderDeleteRequest {
+  string external_order_id = 1;          // ID заказа в интернет-магазине
+  int32 fim_biz_order_id = 2;            // ID заказа в FimBiz
+  optional string reason = 3;            // Причина удаления (опционально)
+}
+
+// Ответ на уведомление об удалении
+message NotifyOrderDeleteResponse {
   bool success = 1;
   string message = 2;
 }

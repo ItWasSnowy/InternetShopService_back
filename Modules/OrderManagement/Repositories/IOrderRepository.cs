@@ -8,6 +8,7 @@ public interface IOrderRepository
     Task<List<Order>> GetByUserIdAsync(Guid userId);
     Task<Order> CreateAsync(Order order);
     Task<Order> UpdateAsync(Order order);
+    Task<bool> DeleteAsync(Guid id);
     Task<string> GenerateOrderNumberAsync();
     
     // Метод для получения неотправленных заказов
