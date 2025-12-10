@@ -19,6 +19,13 @@ public class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
         builder.Property(x => x.TotalAmount)
             .HasPrecision(18, 2);
 
+        builder.Property(x => x.FimBizBillId)
+            .IsRequired(false);
+
+        builder.Property(x => x.PdfUrl)
+            .HasMaxLength(500)
+            .IsRequired(false);
+
         builder.HasIndex(x => x.InvoiceNumber)
             .IsUnique();
         builder.HasIndex(x => x.OrderId);

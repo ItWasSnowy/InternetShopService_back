@@ -35,5 +35,22 @@ public class EmailService : IEmailService
         
         return SendEmailAsync(email, subject, body);
     }
+
+    public Task SendBillNotificationAsync(string email, Guid orderId, string billNumber, string? pdfUrl)
+    {
+        if (string.IsNullOrEmpty(email))
+        {
+            _logger.LogWarning("Не указан email для отправки уведомления о счете для заказа {OrderId}", orderId);
+            return Task.CompletedTask;
+        }
+
+        var subject = $"Создан счет на оплату для заказа #{orderId}";
+        var pdfLink = !string.IsNullOrEmpty(pdfUrl) 
+            ? $"<br><br>Скачать счет: <a href=\"{pdfUrl}\">{pdfUrl}</a>" 
+            : "";
+        var body = $"Для вашего заказа #{orderId} создан счет на оплату №{billNumber}.{pdfLink}";
+        
+        return SendEmailAsync(email, subject, body);
+    }
 }
 

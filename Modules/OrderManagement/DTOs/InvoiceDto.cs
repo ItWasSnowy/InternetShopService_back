@@ -9,6 +9,8 @@ public class InvoiceDto
     public decimal TotalAmount { get; set; }
     public bool IsConfirmed { get; set; }
     public bool IsPaid { get; set; }
+    public int? FimBizBillId { get; set; }
+    public string? PdfUrl { get; set; }
     public List<InvoiceItemDto> Items { get; set; } = new();
 }
 

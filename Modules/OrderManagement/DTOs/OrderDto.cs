@@ -17,6 +17,18 @@ public class OrderDto
     public CargoReceiverDto? CargoReceiver { get; set; }
     public string? Carrier { get; set; } // Название транспортной компании
     public List<OrderAttachmentDto> Attachments { get; set; } = new();
+    public InvoiceInfoDto? Invoice { get; set; } // Информация о счете
+}
+
+public class InvoiceInfoDto
+{
+    public Guid Id { get; set; }
+    public string InvoiceNumber { get; set; } = string.Empty;
+    public DateTime InvoiceDate { get; set; }
+    public bool IsConfirmed { get; set; }
+    public bool IsPaid { get; set; }
+    public string? PdfUrl { get; set; } // Относительный URL (например, "/Files/OrderFiles/123/bill.pdf")
+    public int? FimBizBillId { get; set; }
 }
 
 public class OrderItemDto

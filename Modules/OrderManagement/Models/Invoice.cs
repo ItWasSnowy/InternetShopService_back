@@ -12,6 +12,8 @@ public class Invoice
     public decimal TotalAmount { get; set; }
     public bool IsConfirmed { get; set; }
     public bool IsPaid { get; set; }
+    public int? FimBizBillId { get; set; } // ID счета в FimBiz
+    public string? PdfUrl { get; set; } // URL для скачивания PDF счета
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 

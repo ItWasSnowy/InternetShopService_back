@@ -10,12 +10,15 @@ using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Shared.Repositories;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OrderStatus = InternetShopService_back.Modules.OrderManagement.Models.OrderStatus;
 using GrpcOrder = InternetShopService_back.Infrastructure.Grpc.Orders.Order;
 using GrpcOrderStatus = InternetShopService_back.Infrastructure.Grpc.Orders.OrderStatus;
 using GrpcDeliveryType = InternetShopService_back.Infrastructure.Grpc.Orders.DeliveryType;
 using GrpcOrderItem = InternetShopService_back.Infrastructure.Grpc.Orders.OrderItem;
+using GrpcBillInfo = InternetShopService_back.Infrastructure.Grpc.Orders.BillInfo;
+using GrpcBillStatus = InternetShopService_back.Infrastructure.Grpc.Orders.BillStatus;
 using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order;
 using LocalOrderItem = InternetShopService_back.Modules.OrderManagement.Models.OrderItem;
 
@@ -33,6 +36,7 @@ public class OrderService : IOrderService
     private readonly IEmailService _emailService;
     private readonly ApplicationDbContext _context;
     private readonly ILogger<OrderService> _logger;
+    private readonly IConfiguration _configuration;
 
     public OrderService(
         IOrderRepository orderRepository,
@@ -44,7 +48,8 @@ public class OrderService : IOrderService
         IFimBizGrpcClient fimBizGrpcClient,
         IEmailService emailService,
         ApplicationDbContext context,
-        ILogger<OrderService> logger)
+        ILogger<OrderService> logger,
+        IConfiguration configuration)
     {
         _orderRepository = orderRepository;
         _userAccountRepository = userAccountRepository;
@@ -56,6 +61,7 @@ public class OrderService : IOrderService
         _emailService = emailService;
         _context = context;
         _logger = logger;
+        _configuration = configuration;
     }
 
     public async Task<OrderDto> CreateOrderAsync(CreateOrderDto dto)
@@ -330,6 +336,27 @@ public class OrderService : IOrderService
             }
         }
 
+        // Загружаем информацию о счете, если есть
+        if (order.InvoiceId.HasValue)
+        {
+            var invoice = await _context.Invoices
+                .FirstOrDefaultAsync(i => i.Id == order.InvoiceId.Value);
+            
+            if (invoice != null)
+            {
+                dto.Invoice = new InvoiceInfoDto
+                {
+                    Id = invoice.Id,
+                    InvoiceNumber = invoice.InvoiceNumber,
+                    InvoiceDate = invoice.InvoiceDate,
+                    IsConfirmed = invoice.IsConfirmed,
+                    IsPaid = invoice.IsPaid,
+                    PdfUrl = invoice.PdfUrl, // Относительный URL передаем как есть
+                    FimBizBillId = invoice.FimBizBillId
+                };
+            }
+        }
+
         return dto;
     }
 
@@ -518,6 +545,12 @@ public class OrderService : IOrderService
                     order.TrackingNumber = response.Order.TrackingNumber;
                 }
 
+                // Обрабатываем bill_info, если счет был создан автоматически
+                if (response.BillInfo != null)
+                {
+                    await ProcessBillInfoFromCreateOrderAsync(order, response.BillInfo);
+                }
+
                 await _orderRepository.UpdateAsync(order);
                 
                 _logger.LogInformation("Заказ {OrderId} успешно отправлен в FimBiz. FimBizOrderId: {FimBizOrderId}, OrderNumber: {OrderNumber}", 
@@ -611,5 +644,131 @@ public class OrderService : IOrderService
             OrderStatus.Received => GrpcOrderStatus.Completed,
             _ => (GrpcOrderStatus)0 // OrderStatusUnspecified = 0
         };
+    }
+
+    /// <summary>
+    /// Обработка информации о счете (bill_info) при создании заказа
+    /// </summary>
+    private async Task ProcessBillInfoFromCreateOrderAsync(LocalOrder order, GrpcBillInfo billInfo)
+    {
+        try
+        {
+            // Сохраняем URL как есть (относительный или абсолютный) - фронт сам обработает
+            string? pdfUrl = billInfo.PdfUrl;
+
+            // Проверяем, существует ли уже счет для этого заказа
+            var existingInvoice = await _context.Invoices
+                .FirstOrDefaultAsync(i => i.OrderId == order.Id);
+
+            bool isNewInvoice = existingInvoice == null;
+
+            if (existingInvoice != null)
+            {
+                // Обновляем существующий счет
+                existingInvoice.InvoiceNumber = billInfo.BillNumber;
+                existingInvoice.FimBizBillId = billInfo.BillId;
+                existingInvoice.PdfUrl = pdfUrl; // Сохраняем как есть
+                existingInvoice.IsConfirmed = billInfo.Status == GrpcBillStatus.Confirmed || billInfo.Status == GrpcBillStatus.Paid;
+                existingInvoice.IsPaid = billInfo.Status == GrpcBillStatus.Paid;
+                existingInvoice.UpdatedAt = DateTime.UtcNow;
+                
+                if (billInfo.CreatedAt > 0)
+                {
+                    existingInvoice.InvoiceDate = DateTimeOffset.FromUnixTimeSeconds(billInfo.CreatedAt).UtcDateTime;
+                }
+
+                _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, BillNumber: {BillNumber}, PdfUrl: {PdfUrl}", 
+                    order.Id, existingInvoice.Id, billInfo.BillNumber, pdfUrl ?? "не указан");
+            }
+            else
+            {
+                // Создаем новый счет
+                var invoice = new Invoice
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = order.Id,
+                    CounterpartyId = order.CounterpartyId,
+                    InvoiceNumber = billInfo.BillNumber,
+                    FimBizBillId = billInfo.BillId,
+                    PdfUrl = pdfUrl, // Сохраняем как есть
+                    InvoiceDate = billInfo.CreatedAt > 0 
+                        ? DateTimeOffset.FromUnixTimeSeconds(billInfo.CreatedAt).UtcDateTime 
+                        : DateTime.UtcNow,
+                    TotalAmount = order.TotalAmount,
+                    IsConfirmed = billInfo.Status == GrpcBillStatus.Confirmed || billInfo.Status == GrpcBillStatus.Paid,
+                    IsPaid = billInfo.Status == GrpcBillStatus.Paid,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+
+                await _context.Invoices.AddAsync(invoice);
+                order.InvoiceId = invoice.Id;
+
+                _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, BillNumber: {BillNumber}, PdfUrl: {PdfUrl}", 
+                    order.Id, invoice.Id, billInfo.BillNumber, pdfUrl ?? "не указан");
+            }
+
+            await _context.SaveChangesAsync();
+
+            // Отправляем уведомление контрагенту о создании/обновлении счета
+            // Для email формируем полный URL, если он относительный
+            if (isNewInvoice || !string.IsNullOrEmpty(pdfUrl))
+            {
+                string? fullPdfUrlForEmail = pdfUrl;
+                if (!string.IsNullOrEmpty(pdfUrl) && !pdfUrl.StartsWith("http://") && !pdfUrl.StartsWith("https://"))
+                {
+                    // Относительный URL - формируем полный для email
+                    var fimBizBaseUrl = _configuration["FimBiz:GrpcEndpoint"]?.Replace(":443", "").Replace("https://", "https://");
+                    if (string.IsNullOrEmpty(fimBizBaseUrl))
+                    {
+                        fimBizBaseUrl = "https://api.fimbiz.ru";
+                    }
+                    fullPdfUrlForEmail = fimBizBaseUrl.TrimEnd('/') + "/" + pdfUrl.TrimStart('/');
+                }
+                await NotifyContractorAboutBillAsync(order.Id, billInfo.BillNumber, fullPdfUrlForEmail);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при обработке bill_info для заказа {OrderId}", order.Id);
+            // Не прерываем выполнение, просто логируем ошибку
+        }
+    }
+
+    /// <summary>
+    /// Отправка уведомления контрагенту о создании/обновлении счета
+    /// </summary>
+    private async Task NotifyContractorAboutBillAsync(Guid orderId, string billNumber, string? pdfUrl)
+    {
+        try
+        {
+            var order = await _orderRepository.GetByIdAsync(orderId);
+            if (order == null)
+            {
+                _logger.LogWarning("Не удалось отправить уведомление о счете: заказ {OrderId} не найден", orderId);
+                return;
+            }
+
+            var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
+            if (counterparty == null || string.IsNullOrEmpty(counterparty.Email))
+            {
+                _logger.LogWarning("Не удалось отправить уведомление о счете для заказа {OrderId}: email контрагента не указан", orderId);
+                return;
+            }
+
+            await _emailService.SendBillNotificationAsync(
+                counterparty.Email,
+                orderId,
+                billNumber,
+                pdfUrl);
+
+            _logger.LogInformation("Отправлено уведомление о счете на email {Email} для заказа {OrderId}", 
+                counterparty.Email, orderId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при отправке уведомления о счете для заказа {OrderId}", orderId);
+            // Не прерываем выполнение при ошибке отправки уведомления
+        }
     }
 }
