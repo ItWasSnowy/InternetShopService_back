@@ -4,193 +4,366 @@ option csharp_namespace = "InternetShopService_back.Infrastructure.Grpc.Orders";
 
 package orders;
 
-// Сервис синхронизации заказов (клиентский - для отправки в FimBiz)
-service OrderSyncService {
-  // Создать заказ из интернет-магазина
-  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
-  
-  // Обновить статус заказа (интернет-магазин может обновлять статус оплаты)
-  rpc UpdateOrderStatus (UpdateOrderStatusRequest) returns (UpdateOrderStatusResponse);
-  
-  // Получить информацию о заказе
-  rpc GetOrder (GetOrderRequest) returns (Order);
-}
+// Сервис синхронизации заказов
 
-// Серверный сервис для приема обновлений от FimBiz
-service OrderSyncServerService {
-  // Уведомление об изменении статуса заказа от FimBiz
-  rpc NotifyOrderStatusChange (NotifyOrderStatusChangeRequest) returns (NotifyOrderStatusChangeResponse);
+service OrderSyncService {
+
+  // Создать заказ из интернет-магазина
+
+  rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
+
   
-  // Уведомление об обновлении заказа от FimBiz
-  rpc NotifyOrderUpdate (NotifyOrderUpdateRequest) returns (NotifyOrderUpdateResponse);
+
+  // Обновить статус заказа (интернет-магазин может обновлять статус оплаты)
+
+  rpc UpdateOrderStatus (UpdateOrderStatusRequest) returns (UpdateOrderStatusResponse);
+
   
-  // Уведомление об удалении заказа от FimBiz
-  rpc NotifyOrderDelete (NotifyOrderDeleteRequest) returns (NotifyOrderDeleteResponse);
+
+  // Получить информацию о заказе
+
+  rpc GetOrder (GetOrderRequest) returns (Order);
+
 }
 
 // Запрос создания заказа
+
 message CreateOrderRequest {
+
   int32 company_id = 1;                  // ID компании в FimBiz
+
   string external_order_id = 2;          // ID заказа в интернет-магазине
+
   int32 contractor_id = 3;               // ID контрагента
+
   string delivery_address = 4;           // Адрес доставки
+
   DeliveryType delivery_type = 5;        // Тип доставки
+
   repeated OrderItem items = 6;          // Позиции заказа
+
   optional string comment = 7;           // Комментарий
+
   optional int32 organization_id = 8;    // ID организации (опционально)
+
   map<string, string> metadata = 9;      // Дополнительные метаданные
+
 }
 
 // Ответ на создание заказа
+
 message CreateOrderResponse {
+
   bool success = 1;
+
   string message = 2;
+
   Order order = 3;
+
   optional BillInfo bill_info = 4;       // Информация о созданном счете
+
 }
 
 // Запрос обновления статуса заказа
+
 message UpdateOrderStatusRequest {
+
   string external_order_id = 1;          // ID заказа в интернет-магазине
+
   int32 company_id = 2;                 // ID компании в FimBiz
+
   OrderStatus new_status = 3;            // Новый статус
+
   optional string comment = 4;           // Комментарий к изменению
+
 }
 
 // Ответ на обновление статуса
+
 message UpdateOrderStatusResponse {
+
   bool success = 1;
+
   string message = 2;
+
   Order order = 3;
+
 }
 
 // Запрос получения заказа
+
 message GetOrderRequest {
+
   string external_order_id = 1;          // ID заказа в интернет-магазине
+
   int32 company_id = 2;                  // ID компании в FimBiz
+
 }
 
 // Заказ
+
 message Order {
+
   int32 order_id = 1;                    // ID заказа в FimBiz
+
   string external_order_id = 2;          // ID заказа в интернет-магазине
+
   string order_number = 3;               // Номер заказа (сквозная нумерация)
+
   int32 contractor_id = 4;
+
   OrderStatus status = 5;
+
   string delivery_address = 6;
+
   DeliveryType delivery_type = 7;
+
   int64 total_price = 8;                 // В копейках
+
   optional int64 modified_price = 9;     // Измененная стоимость
+
   optional string tracking_number = 10;  // Трек-номер
+
   repeated OrderItem items = 11;
+
   optional BillInfo bill_info = 12;
+
   optional TransferDocumentInfo upd_info = 13;
+
   int64 created_at = 14;                 // Unix timestamp
+
   int64 status_changed_at = 15;
+
+  optional string carrier = 16;          // Название транспортной компании
+
+  bool is_priority = 17;                 // Приоритетный заказ
+
+  bool is_long_assembling = 18;          // Флаг долгой сборки
+
+  optional int32 assembler_id = 19;     // ID сборщика (если назначен)
+
+  optional int32 driver_id = 20;         // ID водителя (если назначен)
+
+  optional int64 assembled_at = 21;      // Unix timestamp сборки
+
+  optional int64 shipped_at = 22;        // Unix timestamp отправки
+
+  optional int64 delivered_at = 23;      // Unix timestamp доставки
+
 }
 
 // Позиция заказа
+
 message OrderItem {
+
   optional int32 nomenclature_id = 1;    // ID номенклатуры (если есть)
+
   string name = 2;                       // Наименование
+
   int32 quantity = 3;                    // Количество
+
   int64 price = 4;                       // Цена в копейках
+
   bool is_available = 5;                 // Есть ли в наличии
+
   bool requires_manufacturing = 6;       // Требует изготовления
+
 }
 
 // Информация о счете
+
 message BillInfo {
+
   int32 bill_id = 1;
+
   string bill_number = 2;
+
   string pdf_url = 3;
+
   BillStatus status = 4;
+
   int64 created_at = 5;
+
 }
 
 // Информация об УПД
+
 message TransferDocumentInfo {
+
   int32 upd_id = 1;
+
   string upd_number = 2;
+
   string pdf_url = 3;
+
   int64 created_at = 4;
+
 }
 
 // Статус заказа
+
 enum OrderStatus {
+
   ORDER_STATUS_UNSPECIFIED = 0;  // Первое значение должно быть 0 в proto3
+
   PROCESSING = 1;
+
   WAITING_FOR_PAYMENT = 2;
+
   BILL_CONFIRMED = 3;
+
   MANUFACTURING = 4;
+
   PICKING = 5;
+
   TRANSFERRED_TO_TRANSPORT = 6;
+
   DELIVERING_BY_TRANSPORT = 7;
+
   DELIVERING = 8;
+
   AWAITING_PICKUP = 9;
+
   COMPLETED = 10;
+
 }
 
 // Тип доставки
+
 enum DeliveryType {
+
   DELIVERY_TYPE_UNSPECIFIED = 0;  // Первое значение должно быть 0 в proto3
+
   SELF_PICKUP = 1;
+
   COMPANY_DELIVERY = 2;
+
   TRANSPORT_COMPANY = 3;
+
 }
 
 // Статус счета
+
 enum BillStatus {
+
   CREATED = 0;
+
   PAID = 1;
+
   CONFIRMED = 2;
+
   CANCELLED = 3;
+
+}
+
+// Серверный сервис для приема обновлений от FimBiz
+
+service OrderSyncServerService {
+
+  // Уведомление об изменении статуса заказа от FimBiz
+
+  rpc NotifyOrderStatusChange (NotifyOrderStatusChangeRequest) returns (NotifyOrderStatusChangeResponse);
+
+  
+
+  // Уведомление об обновлении заказа от FimBiz
+
+  rpc NotifyOrderUpdate (NotifyOrderUpdateRequest) returns (NotifyOrderUpdateResponse);
+
+  
+
+  // Уведомление об удалении заказа от FimBiz
+
+  rpc NotifyOrderDelete (NotifyOrderDeleteRequest) returns (NotifyOrderDeleteResponse);
+
 }
 
 // Запрос уведомления об изменении статуса заказа
+
 message NotifyOrderStatusChangeRequest {
+
   string external_order_id = 1;          // ID заказа в интернет-магазине
+
   int32 fim_biz_order_id = 2;            // ID заказа в FimBiz
+
   OrderStatus new_status = 3;            // Новый статус
+
   optional string comment = 4;           // Комментарий к изменению
+
   optional int64 modified_price = 5;     // Измененная стоимость (в копейках)
+
   optional string tracking_number = 6;   // Трек-номер
+
   optional BillInfo bill_info = 7;       // Информация о счете (если создан)
+
   optional TransferDocumentInfo upd_info = 8; // Информация об УПД (если создан)
+
   optional int32 assembler_id = 9;       // ID сборщика (если назначен)
+
   optional int32 driver_id = 10;         // ID водителя (если назначен)
+
   bool is_priority = 11;                 // Приоритетный заказ
+
   bool is_long_assembling = 12;          // Флаг долгой сборки
+
   int64 status_changed_at = 13;          // Unix timestamp изменения статуса
+
+  optional string carrier = 14;          // Название транспортной компании
+
+  optional int64 assembled_at = 15;      // Unix timestamp сборки
+
+  optional int64 shipped_at = 16;        // Unix timestamp отправки
+
+  optional int64 delivered_at = 17;      // Unix timestamp доставки
+
 }
 
 // Ответ на уведомление об изменении статуса
+
 message NotifyOrderStatusChangeResponse {
+
   bool success = 1;
+
   string message = 2;
+
 }
 
 // Запрос уведомления об обновлении заказа
+
 message NotifyOrderUpdateRequest {
+
   Order order = 1;                       // Полная информация о заказе
+
 }
 
 // Ответ на уведомление об обновлении
+
 message NotifyOrderUpdateResponse {
+
   bool success = 1;
+
   string message = 2;
+
 }
 
 // Запрос уведомления об удалении заказа
+
 message NotifyOrderDeleteRequest {
+
   string external_order_id = 1;          // ID заказа в интернет-магазине
+
   int32 fim_biz_order_id = 2;            // ID заказа в FimBiz
+
   optional string reason = 3;            // Причина удаления (опционально)
+
 }
 
 // Ответ на уведомление об удалении
-message NotifyOrderDeleteResponse {
-  bool success = 1;
-  string message = 2;
-}
 
+message NotifyOrderDeleteResponse {
+
+  bool success = 1;
+
+  string message = 2;
+
+}

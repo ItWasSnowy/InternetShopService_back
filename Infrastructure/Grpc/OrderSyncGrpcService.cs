@@ -11,6 +11,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using OrderStatus = InternetShopService_back.Modules.OrderManagement.Models.OrderStatus;
 using GrpcOrderStatus = InternetShopService_back.Infrastructure.Grpc.Orders.OrderStatus;
+using GrpcDeliveryType = InternetShopService_back.Infrastructure.Grpc.Orders.DeliveryType;
+using LocalDeliveryType = InternetShopService_back.Modules.OrderManagement.Models.DeliveryType;
 using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order;
 using LocalOrderItem = InternetShopService_back.Modules.OrderManagement.Models.OrderItem;
 using GrpcOrder = InternetShopService_back.Infrastructure.Grpc.Orders.Order;
@@ -140,11 +142,18 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             var oldIsPriority = order.IsPriority;
             var oldIsLongAssembling = order.IsLongAssembling;
             var oldFimBizOrderId = order.FimBizOrderId;
+            var oldCarrier = order.Carrier;
+            var oldAssembledAt = order.AssembledAt;
+            var oldShippedAt = order.ShippedAt;
+            var oldDeliveredAt = order.DeliveredAt;
             
-            // Обновляем заказ
+            // Обновляем статус заказа (ВСЕГДА обновляем, даже если статус не изменился)
             order.Status = newStatus;
             order.FimBizOrderId = request.FimBizOrderId;
             order.UpdatedAt = DateTime.UtcNow;
+
+            _logger.LogInformation("Обновление статуса заказа {OrderId} с {OldStatus} на {NewStatus} (FimBiz: {GrpcStatus})", 
+                orderId, oldStatus, newStatus, request.NewStatus);
 
             // Обновляем дополнительные поля, если они переданы
             if (request.HasModifiedPrice)
@@ -152,14 +161,51 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 order.TotalAmount = (decimal)request.ModifiedPrice / 100; // Из копеек в рубли
             }
 
-            if (!string.IsNullOrEmpty(request.TrackingNumber))
+            // Обновляем TrackingNumber (обновляем всегда, даже если пустой, чтобы очистить старое значение)
+            order.TrackingNumber = string.IsNullOrEmpty(request.TrackingNumber) ? null : request.TrackingNumber;
+
+            // Обновляем Carrier (обновляем всегда, даже если пустой, чтобы очистить старое значение)
+            order.Carrier = string.IsNullOrEmpty(request.Carrier) ? null : request.Carrier;
+            if (oldCarrier != order.Carrier)
             {
-                order.TrackingNumber = request.TrackingNumber;
+                _logger.LogInformation("Обновлен Carrier заказа {OrderId} с '{OldCarrier}' на '{NewCarrier}'", 
+                    orderId, oldCarrier ?? "null", order.Carrier ?? "null");
             }
 
             // Обновляем флаги
             order.IsPriority = request.IsPriority;
             order.IsLongAssembling = request.IsLongAssembling;
+
+            // Обновляем даты событий (если переданы)
+            if (request.HasAssembledAt && request.AssembledAt > 0)
+            {
+                order.AssembledAt = DateTimeOffset.FromUnixTimeSeconds(request.AssembledAt).UtcDateTime;
+                if (oldAssembledAt != order.AssembledAt)
+                {
+                    _logger.LogInformation("Обновлен AssembledAt заказа {OrderId} на {AssembledAt}", 
+                        orderId, order.AssembledAt);
+                }
+            }
+
+            if (request.HasShippedAt && request.ShippedAt > 0)
+            {
+                order.ShippedAt = DateTimeOffset.FromUnixTimeSeconds(request.ShippedAt).UtcDateTime;
+                if (oldShippedAt != order.ShippedAt)
+                {
+                    _logger.LogInformation("Обновлен ShippedAt заказа {OrderId} на {ShippedAt}", 
+                        orderId, order.ShippedAt);
+                }
+            }
+
+            if (request.HasDeliveredAt && request.DeliveredAt > 0)
+            {
+                order.DeliveredAt = DateTimeOffset.FromUnixTimeSeconds(request.DeliveredAt).UtcDateTime;
+                if (oldDeliveredAt != order.DeliveredAt)
+                {
+                    _logger.LogInformation("Обновлен DeliveredAt заказа {OrderId} на {DeliveredAt}", 
+                        orderId, order.DeliveredAt);
+                }
+            }
 
             // Обрабатываем bill_info (счет)
             if (request.BillInfo != null)
@@ -186,24 +232,23 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // }
 
             // Проверяем, были ли реальные изменения
+            // ВАЖНО: Статус всегда обновляется, даже если он не изменился, т.к. это уведомление от FimBiz
             bool hasChanges = oldStatus != newStatus
                 || oldTotalAmount != order.TotalAmount
                 || oldTrackingNumber != order.TrackingNumber
                 || oldIsPriority != order.IsPriority
                 || oldIsLongAssembling != order.IsLongAssembling
                 || oldFimBizOrderId != order.FimBizOrderId
+                || oldCarrier != order.Carrier
+                || oldAssembledAt != order.AssembledAt
+                || oldShippedAt != order.ShippedAt
+                || oldDeliveredAt != order.DeliveredAt
                 || request.BillInfo != null
                 || request.UpdInfo != null;
 
-            if (!hasChanges)
-            {
-                _logger.LogDebug("Заказ {OrderId} не изменился, пропускаем обновление", orderId);
-                return new NotifyOrderStatusChangeResponse
-                {
-                    Success = true,
-                    Message = "Заказ не изменился"
-                };
-            }
+            // ВАЖНО: Всегда сохраняем изменения, даже если статус не изменился,
+            // т.к. это уведомление от FimBiz и мы должны синхронизировать данные
+            // if (!hasChanges) - УДАЛЕНО: всегда сохраняем изменения
 
             // Добавляем запись в историю статусов только если статус изменился
             if (oldStatus != newStatus)
@@ -219,15 +264,22 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                         : DateTime.UtcNow
                 };
                 order.StatusHistory.Add(statusHistory);
+                _logger.LogInformation("Добавлена запись в историю статусов для заказа {OrderId}: {OldStatus} -> {NewStatus}", 
+                    orderId, oldStatus, newStatus);
+            }
+            else
+            {
+                _logger.LogInformation("Статус заказа {OrderId} не изменился ({Status}), но другие поля могут быть обновлены", 
+                    orderId, newStatus);
             }
 
             order.SyncedWithFimBizAt = DateTime.UtcNow;
 
-            // Сохраняем изменения
+            // Сохраняем изменения (ВСЕГДА сохраняем, даже если статус не изменился, т.к. могут быть другие изменения)
             await _orderRepository.UpdateAsync(order);
 
-            _logger.LogInformation("Статус заказа {OrderId} успешно обновлен с {OldStatus} на {NewStatus}", 
-                orderId, oldStatus, newStatus);
+            _logger.LogInformation("Заказ {OrderId} успешно обновлен. Статус: {OldStatus} -> {NewStatus}, FimBizOrderId: {FimBizOrderId}", 
+                orderId, oldStatus, newStatus, order.FimBizOrderId);
 
             return new NotifyOrderStatusChangeResponse
             {
@@ -271,6 +323,16 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 _logger.LogInformation("Request.Order.ExternalOrderId: {ExternalOrderId}", request.Order.ExternalOrderId);
                 _logger.LogInformation("Request.Order.OrderId (FimBiz): {OrderId}", request.Order.OrderId);
                 _logger.LogInformation("Request.Order.Status: {Status}", request.Order.Status);
+                _logger.LogInformation("Request.Order.DeliveryType: {DeliveryType}", request.Order.DeliveryType);
+                _logger.LogInformation("Request.Order.DeliveryAddress: {DeliveryAddress}", request.Order.DeliveryAddress ?? "не указан");
+                _logger.LogInformation("Request.Order.Carrier: {Carrier}", request.Order.Carrier ?? "не указан");
+                _logger.LogInformation("Request.Order.IsPriority: {IsPriority}", request.Order.IsPriority);
+                _logger.LogInformation("Request.Order.IsLongAssembling: {IsLongAssembling}", request.Order.IsLongAssembling);
+                _logger.LogInformation("Request.Order.AssemblerId: {AssemblerId}", request.Order.HasAssemblerId ? request.Order.AssemblerId.ToString() : "не указан");
+                _logger.LogInformation("Request.Order.DriverId: {DriverId}", request.Order.HasDriverId ? request.Order.DriverId.ToString() : "не указан");
+                _logger.LogInformation("Request.Order.HasAssembledAt: {HasAssembledAt}", request.Order.HasAssembledAt);
+                _logger.LogInformation("Request.Order.HasShippedAt: {HasShippedAt}", request.Order.HasShippedAt);
+                _logger.LogInformation("Request.Order.HasDeliveredAt: {HasDeliveredAt}", request.Order.HasDeliveredAt);
                 _logger.LogInformation("Request.Order.HasBillInfo: {HasBillInfo}", request.Order.BillInfo != null);
                 _logger.LogInformation("Request.Order.HasUpdInfo: {HasUpdInfo}", request.Order.UpdInfo != null);
                 _logger.LogInformation("Request.Order.Items.Count: {ItemsCount}", request.Order.Items?.Count ?? 0);
@@ -349,8 +411,13 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             var oldTrackingNumber = order.TrackingNumber;
             var oldOrderNumber = order.OrderNumber;
             var oldFimBizOrderId = order.FimBizOrderId;
+            var oldDeliveryType = order.DeliveryType;
+            var oldCarrier = order.Carrier;
             var oldIsPriority = order.IsPriority;
             var oldIsLongAssembling = order.IsLongAssembling;
+            var oldAssembledAt = order.AssembledAt;
+            var oldShippedAt = order.ShippedAt;
+            var oldDeliveredAt = order.DeliveredAt;
 
             // Обновляем все поля заказа из FimBiz
             order.FimBizOrderId = request.Order.OrderId;
@@ -358,19 +425,70 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             order.Status = MapGrpcStatusToLocal(request.Order.Status);
             order.TotalAmount = (decimal)request.Order.TotalPrice / 100; // Из копеек в рубли
             
+            // Обновляем DeliveryType (всегда обновляем, если приходит значение от FimBiz)
+            var newDeliveryType = MapGrpcDeliveryTypeToLocal(request.Order.DeliveryType);
+            if (oldDeliveryType != newDeliveryType)
+            {
+                _logger.LogInformation("Обновлен DeliveryType заказа {OrderId} с {OldDeliveryType} ({OldValue}) на {NewDeliveryType} ({NewValue})", 
+                    orderId, oldDeliveryType, (int)oldDeliveryType, newDeliveryType, (int)newDeliveryType);
+            }
+            order.DeliveryType = newDeliveryType;
+            
             if (request.Order.HasModifiedPrice)
             {
                 order.TotalAmount = (decimal)request.Order.ModifiedPrice / 100;
             }
 
-            if (!string.IsNullOrEmpty(request.Order.TrackingNumber))
+            // Обновляем TrackingNumber (обновляем всегда, даже если пустой, чтобы очистить старое значение)
+            var oldTrackingNumberValue = order.TrackingNumber;
+            order.TrackingNumber = string.IsNullOrEmpty(request.Order.TrackingNumber) ? null : request.Order.TrackingNumber;
+            if (oldTrackingNumberValue != order.TrackingNumber)
             {
-                order.TrackingNumber = request.Order.TrackingNumber;
+                _logger.LogInformation("Обновлен TrackingNumber заказа {OrderId} с '{OldTrackingNumber}' на '{NewTrackingNumber}'", 
+                    orderId, oldTrackingNumberValue ?? "null", order.TrackingNumber ?? "null");
             }
 
-            // Обновляем флаги, если они переданы (в proto они не опциональные, но проверим)
-            // В proto Order нет полей IsPriority и IsLongAssembling, поэтому оставляем как есть
-            // Если нужно будет добавить - нужно обновить proto файл
+            // Обновляем Carrier (обновляем всегда, даже если пустой, чтобы очистить старое значение)
+            var oldCarrierValue = order.Carrier;
+            order.Carrier = string.IsNullOrEmpty(request.Order.Carrier) ? null : request.Order.Carrier;
+            if (oldCarrierValue != order.Carrier)
+            {
+                _logger.LogInformation("Обновлен Carrier заказа {OrderId} с '{OldCarrier}' на '{NewCarrier}'", 
+                    orderId, oldCarrierValue ?? "null", order.Carrier ?? "null");
+            }
+
+            // Обновляем флаги
+            order.IsPriority = request.Order.IsPriority;
+            order.IsLongAssembling = request.Order.IsLongAssembling;
+
+            // Обновляем AssemblerId и DriverId (если переданы)
+            // TODO: Преобразовать FimBiz assembler_id и driver_id в локальные Guid
+            // Это потребует дополнительной таблицы маппинга или синхронизации сотрудников
+            // if (request.Order.HasAssemblerId && request.Order.AssemblerId > 0)
+            // {
+            //     order.AssemblerId = await MapFimBizEmployeeIdToLocalGuid(request.Order.AssemblerId);
+            // }
+            //
+            // if (request.Order.HasDriverId && request.Order.DriverId > 0)
+            // {
+            //     order.DriverId = await MapFimBizEmployeeIdToLocalGuid(request.Order.DriverId);
+            // }
+
+            // Обновляем даты событий (если переданы)
+            if (request.Order.HasAssembledAt && request.Order.AssembledAt > 0)
+            {
+                order.AssembledAt = DateTimeOffset.FromUnixTimeSeconds(request.Order.AssembledAt).UtcDateTime;
+            }
+
+            if (request.Order.HasShippedAt && request.Order.ShippedAt > 0)
+            {
+                order.ShippedAt = DateTimeOffset.FromUnixTimeSeconds(request.Order.ShippedAt).UtcDateTime;
+            }
+
+            if (request.Order.HasDeliveredAt && request.Order.DeliveredAt > 0)
+            {
+                order.DeliveredAt = DateTimeOffset.FromUnixTimeSeconds(request.Order.DeliveredAt).UtcDateTime;
+            }
 
             // Обрабатываем bill_info (счет)
             if (request.Order.BillInfo != null)
@@ -396,6 +514,13 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 || oldTrackingNumber != order.TrackingNumber
                 || oldOrderNumber != order.OrderNumber
                 || oldFimBizOrderId != order.FimBizOrderId
+                || oldDeliveryType != order.DeliveryType
+                || oldCarrier != order.Carrier
+                || oldIsPriority != order.IsPriority
+                || oldIsLongAssembling != order.IsLongAssembling
+                || oldAssembledAt != order.AssembledAt
+                || oldShippedAt != order.ShippedAt
+                || oldDeliveredAt != order.DeliveredAt
                 || request.Order.BillInfo != null
                 || request.Order.UpdInfo != null
                 || (request.Order.Items != null && request.Order.Items.Count > 0);
@@ -831,6 +956,20 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             GrpcOrderStatus.AwaitingPickup => OrderStatus.AwaitingPickup,
             GrpcOrderStatus.Completed => OrderStatus.Received,
             _ => OrderStatus.Processing // По умолчанию
+        };
+    }
+
+    /// <summary>
+    /// Преобразование типа доставки из gRPC в локальный enum
+    /// </summary>
+    private static LocalDeliveryType MapGrpcDeliveryTypeToLocal(GrpcDeliveryType grpcDeliveryType)
+    {
+        return grpcDeliveryType switch
+        {
+            GrpcDeliveryType.SelfPickup => LocalDeliveryType.Pickup,
+            GrpcDeliveryType.CompanyDelivery => LocalDeliveryType.SellerDelivery,
+            GrpcDeliveryType.TransportCompany => LocalDeliveryType.Carrier,
+            _ => LocalDeliveryType.Pickup // По умолчанию самовывоз
         };
     }
 }
