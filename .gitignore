@@ -91,3 +91,4 @@ Thumbs.db
 # Local .NET SDK version (each developer can have their own)
 global.json
 
+/.config/dotnet-tools.json
