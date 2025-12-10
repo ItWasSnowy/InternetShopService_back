@@ -692,13 +692,13 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     }
 
     /// <summary>
-    /// Обработка информации о счете (bill_info)
+    /// Обработка информации о счете (bill_info) - сохраняем только относительный URL PDF
     /// </summary>
     private async Task ProcessBillInfoAsync(LocalOrder order, BillInfo billInfo)
     {
         try
         {
-            // Сохраняем URL как есть (относительный или абсолютный) - фронт сам обработает
+            // Сохраняем только относительный URL - фронт сам обработает
             string? pdfUrl = billInfo.PdfUrl;
 
             // Проверяем, существует ли уже счет для этого заказа
@@ -709,39 +709,21 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
             if (existingInvoice != null)
             {
-                // Обновляем существующий счет
-                existingInvoice.InvoiceNumber = billInfo.BillNumber;
-                existingInvoice.FimBizBillId = billInfo.BillId;
-                existingInvoice.PdfUrl = pdfUrl; // Сохраняем как есть
-                existingInvoice.IsConfirmed = billInfo.Status == BillStatus.Confirmed || billInfo.Status == BillStatus.Paid;
-                existingInvoice.IsPaid = billInfo.Status == BillStatus.Paid;
+                // Обновляем существующий счет - только URL
+                existingInvoice.PdfUrl = pdfUrl;
                 existingInvoice.UpdatedAt = DateTime.UtcNow;
-                
-                if (billInfo.CreatedAt > 0)
-                {
-                    existingInvoice.InvoiceDate = DateTimeOffset.FromUnixTimeSeconds(billInfo.CreatedAt).UtcDateTime;
-                }
 
-                _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, BillNumber: {BillNumber}, PdfUrl: {PdfUrl}", 
-                    order.Id, existingInvoice.Id, billInfo.BillNumber, pdfUrl ?? "не указан");
+                _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
+                    order.Id, existingInvoice.Id, pdfUrl ?? "не указан");
             }
             else
             {
-                // Создаем новый счет
+                // Создаем новый счет - только с URL
                 var invoice = new Invoice
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order.Id,
-                    CounterpartyId = order.CounterpartyId,
-                    InvoiceNumber = billInfo.BillNumber,
-                    FimBizBillId = billInfo.BillId,
-                    PdfUrl = pdfUrl, // Сохраняем как есть
-                    InvoiceDate = billInfo.CreatedAt > 0 
-                        ? DateTimeOffset.FromUnixTimeSeconds(billInfo.CreatedAt).UtcDateTime 
-                        : DateTime.UtcNow,
-                    TotalAmount = order.TotalAmount,
-                    IsConfirmed = billInfo.Status == BillStatus.Confirmed || billInfo.Status == BillStatus.Paid,
-                    IsPaid = billInfo.Status == BillStatus.Paid,
+                    PdfUrl = pdfUrl,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
@@ -749,8 +731,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 await _dbContext.Invoices.AddAsync(invoice);
                 order.InvoiceId = invoice.Id;
 
-                _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, BillNumber: {BillNumber}, PdfUrl: {PdfUrl}", 
-                    order.Id, invoice.Id, billInfo.BillNumber, pdfUrl ?? "не указан");
+                _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
+                    order.Id, invoice.Id, pdfUrl ?? "не указан");
             }
 
             await _dbContext.SaveChangesAsync();
@@ -770,7 +752,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     }
                     fullPdfUrlForEmail = fimBizBaseUrl.TrimEnd('/') + "/" + pdfUrl.TrimStart('/');
                 }
-                await NotifyContractorAboutBillAsync(order.Id, billInfo.BillNumber, fullPdfUrlForEmail);
+                await NotifyContractorAboutBillAsync(order.Id, order.OrderNumber, fullPdfUrlForEmail);
             }
         }
         catch (Exception ex)
@@ -783,7 +765,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     /// <summary>
     /// Отправка уведомления контрагенту о создании/обновлении счета
     /// </summary>
-    private async Task NotifyContractorAboutBillAsync(Guid orderId, string billNumber, string? pdfUrl)
+    private async Task NotifyContractorAboutBillAsync(Guid orderId, string orderNumber, string? pdfUrl)
     {
         try
         {
@@ -804,7 +786,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             await _emailService.SendBillNotificationAsync(
                 counterparty.Email,
                 orderId,
-                billNumber,
+                orderNumber, // Используем номер заказа вместо номера счета
                 pdfUrl);
 
             _logger.LogInformation("Отправлено уведомление о счете на email {Email} для заказа {OrderId}", 

@@ -12,33 +12,16 @@ public class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
 
         builder.HasKey(x => x.Id);
 
-        builder.Property(x => x.InvoiceNumber)
-            .IsRequired()
-            .HasMaxLength(50);
-
-        builder.Property(x => x.TotalAmount)
-            .HasPrecision(18, 2);
-
-        builder.Property(x => x.FimBizBillId)
-            .IsRequired(false);
-
         builder.Property(x => x.PdfUrl)
             .HasMaxLength(500)
             .IsRequired(false);
 
-        builder.HasIndex(x => x.InvoiceNumber)
+        builder.HasIndex(x => x.OrderId)
             .IsUnique();
-        builder.HasIndex(x => x.OrderId);
-        builder.HasIndex(x => x.CounterpartyId);
 
         builder.HasOne(x => x.Order)
             .WithOne(x => x.Invoice)
             .HasForeignKey<Invoice>(x => x.OrderId)
-            .OnDelete(DeleteBehavior.Restrict);
-
-        builder.HasOne(x => x.Counterparty)
-            .WithMany()
-            .HasForeignKey(x => x.CounterpartyId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

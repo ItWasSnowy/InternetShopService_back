@@ -27,7 +27,7 @@ public class InvoiceItemConfiguration : IEntityTypeConfiguration<InvoiceItem>
             .HasPrecision(18, 2);
 
         builder.HasOne(x => x.Invoice)
-            .WithMany(x => x.Items)
+            .WithMany()
             .HasForeignKey(x => x.InvoiceId)
             .OnDelete(DeleteBehavior.Cascade);
     }

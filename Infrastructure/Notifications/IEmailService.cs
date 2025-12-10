@@ -4,6 +4,6 @@ public interface IEmailService
 {
     Task SendEmailAsync(string to, string subject, string body);
     Task SendOrderStatusNotificationAsync(string email, Guid orderId, string status);
-    Task SendBillNotificationAsync(string email, Guid orderId, string billNumber, string? pdfUrl);
+    Task SendBillNotificationAsync(string email, Guid orderId, string orderNumber, string? pdfUrl);
 }
 

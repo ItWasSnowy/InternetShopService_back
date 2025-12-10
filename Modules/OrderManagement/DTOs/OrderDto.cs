@@ -22,13 +22,7 @@ public class OrderDto
 
 public class InvoiceInfoDto
 {
-    public Guid Id { get; set; }
-    public string InvoiceNumber { get; set; } = string.Empty;
-    public DateTime InvoiceDate { get; set; }
-    public bool IsConfirmed { get; set; }
-    public bool IsPaid { get; set; }
     public string? PdfUrl { get; set; } // Относительный URL (например, "/Files/OrderFiles/123/bill.pdf")
-    public int? FimBizBillId { get; set; }
 }
 
 public class OrderItemDto

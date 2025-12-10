@@ -336,23 +336,17 @@ public class OrderService : IOrderService
             }
         }
 
-        // Загружаем информацию о счете, если есть
+        // Загружаем информацию о счете, если есть - только относительный URL
         if (order.InvoiceId.HasValue)
         {
             var invoice = await _context.Invoices
                 .FirstOrDefaultAsync(i => i.Id == order.InvoiceId.Value);
             
-            if (invoice != null)
+            if (invoice != null && !string.IsNullOrEmpty(invoice.PdfUrl))
             {
                 dto.Invoice = new InvoiceInfoDto
                 {
-                    Id = invoice.Id,
-                    InvoiceNumber = invoice.InvoiceNumber,
-                    InvoiceDate = invoice.InvoiceDate,
-                    IsConfirmed = invoice.IsConfirmed,
-                    IsPaid = invoice.IsPaid,
-                    PdfUrl = invoice.PdfUrl, // Относительный URL передаем как есть
-                    FimBizBillId = invoice.FimBizBillId
+                    PdfUrl = invoice.PdfUrl // Относительный URL передаем как есть
                 };
             }
         }
@@ -647,13 +641,13 @@ public class OrderService : IOrderService
     }
 
     /// <summary>
-    /// Обработка информации о счете (bill_info) при создании заказа
+    /// Обработка информации о счете (bill_info) при создании заказа - сохраняем только относительный URL PDF
     /// </summary>
     private async Task ProcessBillInfoFromCreateOrderAsync(LocalOrder order, GrpcBillInfo billInfo)
     {
         try
         {
-            // Сохраняем URL как есть (относительный или абсолютный) - фронт сам обработает
+            // Сохраняем только относительный URL - фронт сам обработает
             string? pdfUrl = billInfo.PdfUrl;
 
             // Проверяем, существует ли уже счет для этого заказа
@@ -664,39 +658,21 @@ public class OrderService : IOrderService
 
             if (existingInvoice != null)
             {
-                // Обновляем существующий счет
-                existingInvoice.InvoiceNumber = billInfo.BillNumber;
-                existingInvoice.FimBizBillId = billInfo.BillId;
-                existingInvoice.PdfUrl = pdfUrl; // Сохраняем как есть
-                existingInvoice.IsConfirmed = billInfo.Status == GrpcBillStatus.Confirmed || billInfo.Status == GrpcBillStatus.Paid;
-                existingInvoice.IsPaid = billInfo.Status == GrpcBillStatus.Paid;
+                // Обновляем существующий счет - только URL
+                existingInvoice.PdfUrl = pdfUrl;
                 existingInvoice.UpdatedAt = DateTime.UtcNow;
-                
-                if (billInfo.CreatedAt > 0)
-                {
-                    existingInvoice.InvoiceDate = DateTimeOffset.FromUnixTimeSeconds(billInfo.CreatedAt).UtcDateTime;
-                }
 
-                _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, BillNumber: {BillNumber}, PdfUrl: {PdfUrl}", 
-                    order.Id, existingInvoice.Id, billInfo.BillNumber, pdfUrl ?? "не указан");
+                _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
+                    order.Id, existingInvoice.Id, pdfUrl ?? "не указан");
             }
             else
             {
-                // Создаем новый счет
+                // Создаем новый счет - только с URL
                 var invoice = new Invoice
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order.Id,
-                    CounterpartyId = order.CounterpartyId,
-                    InvoiceNumber = billInfo.BillNumber,
-                    FimBizBillId = billInfo.BillId,
-                    PdfUrl = pdfUrl, // Сохраняем как есть
-                    InvoiceDate = billInfo.CreatedAt > 0 
-                        ? DateTimeOffset.FromUnixTimeSeconds(billInfo.CreatedAt).UtcDateTime 
-                        : DateTime.UtcNow,
-                    TotalAmount = order.TotalAmount,
-                    IsConfirmed = billInfo.Status == GrpcBillStatus.Confirmed || billInfo.Status == GrpcBillStatus.Paid,
-                    IsPaid = billInfo.Status == GrpcBillStatus.Paid,
+                    PdfUrl = pdfUrl,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
@@ -704,8 +680,8 @@ public class OrderService : IOrderService
                 await _context.Invoices.AddAsync(invoice);
                 order.InvoiceId = invoice.Id;
 
-                _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, BillNumber: {BillNumber}, PdfUrl: {PdfUrl}", 
-                    order.Id, invoice.Id, billInfo.BillNumber, pdfUrl ?? "не указан");
+                _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
+                    order.Id, invoice.Id, pdfUrl ?? "не указан");
             }
 
             await _context.SaveChangesAsync();
@@ -725,7 +701,7 @@ public class OrderService : IOrderService
                     }
                     fullPdfUrlForEmail = fimBizBaseUrl.TrimEnd('/') + "/" + pdfUrl.TrimStart('/');
                 }
-                await NotifyContractorAboutBillAsync(order.Id, billInfo.BillNumber, fullPdfUrlForEmail);
+                await NotifyContractorAboutBillAsync(order.Id, order.OrderNumber, fullPdfUrlForEmail);
             }
         }
         catch (Exception ex)
@@ -738,7 +714,7 @@ public class OrderService : IOrderService
     /// <summary>
     /// Отправка уведомления контрагенту о создании/обновлении счета
     /// </summary>
-    private async Task NotifyContractorAboutBillAsync(Guid orderId, string billNumber, string? pdfUrl)
+    private async Task NotifyContractorAboutBillAsync(Guid orderId, string orderNumber, string? pdfUrl)
     {
         try
         {
@@ -759,7 +735,7 @@ public class OrderService : IOrderService
             await _emailService.SendBillNotificationAsync(
                 counterparty.Email,
                 orderId,
-                billNumber,
+                orderNumber,
                 pdfUrl);
 
             _logger.LogInformation("Отправлено уведомление о счете на email {Email} для заказа {OrderId}", 
