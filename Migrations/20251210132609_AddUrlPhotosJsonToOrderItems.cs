@@ -11,181 +11,422 @@ namespace InternetShopService_back.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropForeignKey(
-                name: "FK_Invoices_Counterparties_CounterpartyId",
-                table: "Invoices");
+            // Безопасно удаляем внешний ключ, если существует
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints 
+                        WHERE constraint_schema = 'public' 
+                        AND table_name = 'Invoices' 
+                        AND constraint_name = 'FK_Invoices_Counterparties_CounterpartyId'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" DROP CONSTRAINT ""FK_Invoices_Counterparties_CounterpartyId"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropIndex(
-                name: "IX_Invoices_CounterpartyId",
-                table: "Invoices");
+            // Безопасно удаляем индексы, если существуют
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM pg_indexes 
+                        WHERE schemaname = 'public' 
+                        AND tablename = 'Invoices' 
+                        AND indexname = 'IX_Invoices_CounterpartyId'
+                    ) THEN
+                        DROP INDEX IF EXISTS ""IX_Invoices_CounterpartyId"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropIndex(
-                name: "IX_Invoices_InvoiceNumber",
-                table: "Invoices");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM pg_indexes 
+                        WHERE schemaname = 'public' 
+                        AND tablename = 'Invoices' 
+                        AND indexname = 'IX_Invoices_InvoiceNumber'
+                    ) THEN
+                        DROP INDEX IF EXISTS ""IX_Invoices_InvoiceNumber"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "CarrierId",
-                table: "Orders");
+            // Безопасно удаляем столбцы, если существуют
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'CarrierId'
+                    ) THEN
+                        ALTER TABLE ""Orders"" DROP COLUMN ""CarrierId"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "CounterpartyId",
-                table: "Invoices");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'CounterpartyId'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" DROP COLUMN ""CounterpartyId"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "InvoiceDate",
-                table: "Invoices");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'InvoiceDate'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" DROP COLUMN ""InvoiceDate"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "InvoiceNumber",
-                table: "Invoices");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'InvoiceNumber'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" DROP COLUMN ""InvoiceNumber"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "IsConfirmed",
-                table: "Invoices");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'IsConfirmed'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" DROP COLUMN ""IsConfirmed"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "IsPaid",
-                table: "Invoices");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'IsPaid'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" DROP COLUMN ""IsPaid"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "TotalAmount",
-                table: "Invoices");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'TotalAmount'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" DROP COLUMN ""TotalAmount"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<string>(
-                name: "Carrier",
-                table: "Orders",
-                type: "character varying(500)",
-                maxLength: 500,
-                nullable: true);
+            // Безопасно добавляем столбцы в Orders, если их нет
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'Carrier'
+                    ) THEN
+                        ALTER TABLE ""Orders"" ADD COLUMN ""Carrier"" character varying(500) NULL;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<int>(
-                name: "FimBizOrderId",
-                table: "Orders",
-                type: "integer",
-                nullable: true);
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'FimBizOrderId'
+                    ) THEN
+                        ALTER TABLE ""Orders"" ADD COLUMN ""FimBizOrderId"" integer NULL;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<DateTime>(
-                name: "SyncedWithFimBizAt",
-                table: "Orders",
-                type: "timestamp with time zone",
-                nullable: true);
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'SyncedWithFimBizAt'
+                    ) THEN
+                        ALTER TABLE ""Orders"" ADD COLUMN ""SyncedWithFimBizAt"" timestamp with time zone NULL;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<string>(
-                name: "UrlPhotosJson",
-                table: "OrderItems",
-                type: "character varying(2000)",
-                maxLength: 2000,
-                nullable: true);
+            // Добавляем UrlPhotosJson с проверкой существования столбца
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'OrderItems' AND column_name = 'UrlPhotosJson'
+                    ) THEN
+                        ALTER TABLE ""OrderItems"" ADD COLUMN ""UrlPhotosJson"" character varying(2000) NULL;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<string>(
-                name: "PdfUrl",
-                table: "Invoices",
-                type: "character varying(500)",
-                maxLength: 500,
-                nullable: true);
+            // Безопасно добавляем столбец PdfUrl в Invoices, если его нет
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'PdfUrl'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" ADD COLUMN ""PdfUrl"" character varying(500) NULL;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.CreateIndex(
-                name: "IX_Orders_FimBizOrderId",
-                table: "Orders",
-                column: "FimBizOrderId");
+            // Безопасно создаем индекс, если его нет
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_indexes 
+                        WHERE schemaname = 'public' 
+                        AND tablename = 'Orders' 
+                        AND indexname = 'IX_Orders_FimBizOrderId'
+                    ) THEN
+                        CREATE INDEX ""IX_Orders_FimBizOrderId"" ON ""Orders"" (""FimBizOrderId"");
+                    END IF;
+                END $$;
+            ");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropIndex(
-                name: "IX_Orders_FimBizOrderId",
-                table: "Orders");
+            // Безопасно удаляем индекс, если существует
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM pg_indexes 
+                        WHERE schemaname = 'public' 
+                        AND tablename = 'Orders' 
+                        AND indexname = 'IX_Orders_FimBizOrderId'
+                    ) THEN
+                        DROP INDEX IF EXISTS ""IX_Orders_FimBizOrderId"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "Carrier",
-                table: "Orders");
+            // Безопасно удаляем столбцы, если существуют
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'Carrier'
+                    ) THEN
+                        ALTER TABLE ""Orders"" DROP COLUMN ""Carrier"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "FimBizOrderId",
-                table: "Orders");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'FimBizOrderId'
+                    ) THEN
+                        ALTER TABLE ""Orders"" DROP COLUMN ""FimBizOrderId"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "SyncedWithFimBizAt",
-                table: "Orders");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'SyncedWithFimBizAt'
+                    ) THEN
+                        ALTER TABLE ""Orders"" DROP COLUMN ""SyncedWithFimBizAt"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "UrlPhotosJson",
-                table: "OrderItems");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'OrderItems' AND column_name = 'UrlPhotosJson'
+                    ) THEN
+                        ALTER TABLE ""OrderItems"" DROP COLUMN ""UrlPhotosJson"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.DropColumn(
-                name: "PdfUrl",
-                table: "Invoices");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'PdfUrl'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" DROP COLUMN ""PdfUrl"";
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<Guid>(
-                name: "CarrierId",
-                table: "Orders",
-                type: "uuid",
-                nullable: true);
+            // Безопасно добавляем столбцы обратно, если их нет
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Orders' AND column_name = 'CarrierId'
+                    ) THEN
+                        ALTER TABLE ""Orders"" ADD COLUMN ""CarrierId"" uuid NULL;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<Guid>(
-                name: "CounterpartyId",
-                table: "Invoices",
-                type: "uuid",
-                nullable: false,
-                defaultValue: new Guid("00000000-0000-0000-0000-000000000000"));
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'CounterpartyId'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" ADD COLUMN ""CounterpartyId"" uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000';
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<DateTime>(
-                name: "InvoiceDate",
-                table: "Invoices",
-                type: "timestamp with time zone",
-                nullable: false,
-                defaultValue: new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified));
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'InvoiceDate'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" ADD COLUMN ""InvoiceDate"" timestamp with time zone NOT NULL DEFAULT '0001-01-01 00:00:00+00';
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<string>(
-                name: "InvoiceNumber",
-                table: "Invoices",
-                type: "character varying(50)",
-                maxLength: 50,
-                nullable: false,
-                defaultValue: "");
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'InvoiceNumber'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" ADD COLUMN ""InvoiceNumber"" character varying(50) NOT NULL DEFAULT '';
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<bool>(
-                name: "IsConfirmed",
-                table: "Invoices",
-                type: "boolean",
-                nullable: false,
-                defaultValue: false);
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'IsConfirmed'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" ADD COLUMN ""IsConfirmed"" boolean NOT NULL DEFAULT false;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<bool>(
-                name: "IsPaid",
-                table: "Invoices",
-                type: "boolean",
-                nullable: false,
-                defaultValue: false);
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'IsPaid'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" ADD COLUMN ""IsPaid"" boolean NOT NULL DEFAULT false;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddColumn<decimal>(
-                name: "TotalAmount",
-                table: "Invoices",
-                type: "numeric(18,2)",
-                precision: 18,
-                scale: 2,
-                nullable: false,
-                defaultValue: 0m);
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'public' AND table_name = 'Invoices' AND column_name = 'TotalAmount'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" ADD COLUMN ""TotalAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.CreateIndex(
-                name: "IX_Invoices_CounterpartyId",
-                table: "Invoices",
-                column: "CounterpartyId");
+            // Безопасно создаем индексы, если их нет
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_indexes 
+                        WHERE schemaname = 'public' 
+                        AND tablename = 'Invoices' 
+                        AND indexname = 'IX_Invoices_CounterpartyId'
+                    ) THEN
+                        CREATE INDEX ""IX_Invoices_CounterpartyId"" ON ""Invoices"" (""CounterpartyId"");
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.CreateIndex(
-                name: "IX_Invoices_InvoiceNumber",
-                table: "Invoices",
-                column: "InvoiceNumber",
-                unique: true);
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_indexes 
+                        WHERE schemaname = 'public' 
+                        AND tablename = 'Invoices' 
+                        AND indexname = 'IX_Invoices_InvoiceNumber'
+                    ) THEN
+                        CREATE UNIQUE INDEX ""IX_Invoices_InvoiceNumber"" ON ""Invoices"" (""InvoiceNumber"");
+                    END IF;
+                END $$;
+            ");
 
-            migrationBuilder.AddForeignKey(
-                name: "FK_Invoices_Counterparties_CounterpartyId",
-                table: "Invoices",
-                column: "CounterpartyId",
-                principalTable: "Counterparties",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
+            // Безопасно создаем внешний ключ, если его нет
+            migrationBuilder.Sql(@"
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.table_constraints 
+                        WHERE constraint_schema = 'public' 
+                        AND table_name = 'Invoices' 
+                        AND constraint_name = 'FK_Invoices_Counterparties_CounterpartyId'
+                    ) THEN
+                        ALTER TABLE ""Invoices"" ADD CONSTRAINT ""FK_Invoices_Counterparties_CounterpartyId"" 
+                        FOREIGN KEY (""CounterpartyId"") REFERENCES ""Counterparties"" (""Id"") ON DELETE RESTRICT;
+                    END IF;
+                END $$;
+            ");
         }
     }
 }

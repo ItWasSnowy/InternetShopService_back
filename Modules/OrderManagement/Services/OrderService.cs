@@ -194,6 +194,30 @@ public class OrderService : IOrderService
         return orderDtos;
     }
 
+    public async Task<PagedResult<OrderDto>> GetOrdersByUserPagedAsync(Guid userId, int page, int pageSize)
+    {
+        // Валидация параметров
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 10;
+        if (pageSize > 100) pageSize = 100; // Максимальный размер страницы
+
+        var (orders, totalCount) = await _orderRepository.GetByUserIdPagedAsync(userId, page, pageSize);
+        var orderDtos = new List<OrderDto>();
+
+        foreach (var order in orders)
+        {
+            orderDtos.Add(await MapToOrderDtoAsync(order));
+        }
+
+        return new PagedResult<OrderDto>
+        {
+            Items = orderDtos,
+            TotalCount = totalCount,
+            Page = page,
+            PageSize = pageSize
+        };
+    }
+
     public async Task<OrderDto> UpdateOrderStatusAsync(Guid orderId, OrderStatus status)
     {
         var order = await _orderRepository.GetByIdAsync(orderId);

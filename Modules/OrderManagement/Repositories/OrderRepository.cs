@@ -35,6 +35,26 @@ public class OrderRepository : IOrderRepository
             .ToListAsync();
     }
 
+    public async Task<(List<Order> Orders, int TotalCount)> GetByUserIdPagedAsync(Guid userId, int page, int pageSize)
+    {
+        var query = _context.Orders
+            .Where(o => o.UserAccountId == userId);
+
+        var totalCount = await query.CountAsync();
+
+        var orders = await query
+            .Include(o => o.Items)
+            .Include(o => o.DeliveryAddress)
+            .Include(o => o.CargoReceiver)
+            .AsSplitQuery() // Разделяем запрос на несколько SQL запросов для лучшей производительности
+            .OrderByDescending(o => o.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return (orders, totalCount);
+    }
+
     public async Task<Order> CreateAsync(Order order)
     {
         order.CreatedAt = DateTime.UtcNow;

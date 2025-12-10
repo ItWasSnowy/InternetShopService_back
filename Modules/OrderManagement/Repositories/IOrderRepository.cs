@@ -6,6 +6,7 @@ public interface IOrderRepository
 {
     Task<Order?> GetByIdAsync(Guid id);
     Task<List<Order>> GetByUserIdAsync(Guid userId);
+    Task<(List<Order> Orders, int TotalCount)> GetByUserIdPagedAsync(Guid userId, int page, int pageSize);
     Task<Order> CreateAsync(Order order);
     Task<Order> UpdateAsync(Order order);
     Task<bool> DeleteAsync(Guid id);

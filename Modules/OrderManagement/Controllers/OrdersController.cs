@@ -20,7 +20,7 @@ public class OrdersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetOrders()
+    public async Task<IActionResult> GetOrders([FromQuery] int page = 1, [FromQuery] int pageSize = 20)
     {
         var userId = HttpContext.GetUserId();
         if (userId == null)
@@ -30,8 +30,8 @@ public class OrdersController : ControllerBase
 
         try
         {
-            var orders = await _orderService.GetOrdersByUserAsync(userId.Value);
-            return Ok(orders);
+            var result = await _orderService.GetOrdersByUserPagedAsync(userId.Value, page, pageSize);
+            return Ok(result);
         }
         catch (Exception)
         {
