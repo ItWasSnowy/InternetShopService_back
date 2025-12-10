@@ -10,6 +10,7 @@ public class OrderItem
     public decimal Price { get; set; }
     public decimal DiscountPercent { get; set; }
     public decimal TotalAmount { get; set; }
+    public string? UrlPhotosJson { get; set; } // JSON массив URL фотографий
     public DateTime CreatedAt { get; set; }
 
     // Navigation properties

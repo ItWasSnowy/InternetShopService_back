@@ -412,7 +412,8 @@ public class CartService : ICartService
                 NomenclatureId = item.NomenclatureId,
                 NomenclatureName = item.NomenclatureName,
                 Quantity = item.Quantity,
-                Price = item.Price
+                Price = item.Price,
+                UrlPhotos = DeserializeUrlPhotos(item.UrlPhotosJson) // Копируем URL фото из корзины
             };
         }).ToList();
 

@@ -34,6 +34,7 @@ public class OrderItemDto
     public decimal Price { get; set; }
     public decimal DiscountPercent { get; set; }
     public decimal TotalAmount { get; set; }
+    public List<string> UrlPhotos { get; set; } = new(); // URL фотографий товара
 }
 
 public class DeliveryAddressDto
@@ -77,5 +78,6 @@ public class CreateOrderItemDto
     public string NomenclatureName { get; set; } = string.Empty;
     public int Quantity { get; set; }
     public decimal Price { get; set; }
+    public List<string>? UrlPhotos { get; set; } // URL фотографий товара (опционально)
 }
 

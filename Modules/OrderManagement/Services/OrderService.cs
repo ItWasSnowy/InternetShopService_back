@@ -1,3 +1,4 @@
+using System.Text.Json;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
@@ -133,6 +134,7 @@ public class OrderService : IOrderService
                 Price = itemDto.Price,
                 DiscountPercent = discountPercent,
                 TotalAmount = itemTotalAmount,
+                UrlPhotosJson = SerializeUrlPhotos(itemDto.UrlPhotos),
                 CreatedAt = DateTime.UtcNow
             };
 
@@ -291,7 +293,8 @@ public class OrderService : IOrderService
                 Quantity = i.Quantity,
                 Price = i.Price,
                 DiscountPercent = i.DiscountPercent,
-                TotalAmount = i.TotalAmount
+                TotalAmount = i.TotalAmount,
+                UrlPhotos = DeserializeUrlPhotos(i.UrlPhotosJson)
             }).ToList(),
             Attachments = order.Attachments.Select(a => new OrderAttachmentDto
             {
@@ -745,6 +748,47 @@ public class OrderService : IOrderService
         {
             _logger.LogError(ex, "Ошибка при отправке уведомления о счете для заказа {OrderId}", orderId);
             // Не прерываем выполнение при ошибке отправки уведомления
+        }
+    }
+
+    /// <summary>
+    /// Сериализация списка URL фотографий в JSON строку
+    /// </summary>
+    private string? SerializeUrlPhotos(List<string>? urlPhotos)
+    {
+        if (urlPhotos == null || !urlPhotos.Any())
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Serialize(urlPhotos);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Десериализация JSON строки в список URL фотографий
+    /// </summary>
+    private List<string> DeserializeUrlPhotos(string? urlPhotosJson)
+    {
+        if (string.IsNullOrWhiteSpace(urlPhotosJson))
+        {
+            return new List<string>();
+        }
+
+        try
+        {
+            var result = JsonSerializer.Deserialize<List<string>>(urlPhotosJson);
+            return result ?? new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
         }
     }
 }

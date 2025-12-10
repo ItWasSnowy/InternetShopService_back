@@ -25,6 +25,9 @@ public class OrderItemConfiguration : IEntityTypeConfiguration<OrderItem>
         builder.Property(x => x.TotalAmount)
             .HasPrecision(18, 2);
 
+        builder.Property(x => x.UrlPhotosJson)
+            .HasMaxLength(2000); // JSON строка с массивом URL
+
         builder.HasOne(x => x.Order)
             .WithMany(x => x.Items)
             .HasForeignKey(x => x.OrderId)
