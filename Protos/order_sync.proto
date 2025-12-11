@@ -168,6 +168,8 @@ message OrderItem {
 
   bool requires_manufacturing = 6;       // Требует изготовления
 
+  repeated string photo_urls = 7;        // URL фотографий товара
+
 }
 
 // Информация о счете

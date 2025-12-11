@@ -544,21 +544,17 @@ public class OrderService : IOrderService
                         grpcItem.NomenclatureId, item.NomenclatureId);
                 }
                 
-                createOrderRequest.Items.Add(grpcItem);
-                
-                // Добавляем UrlPhotos товара в metadata
+                // Добавляем UrlPhotos товара напрямую в OrderItem
                 if (!string.IsNullOrWhiteSpace(item.UrlPhotosJson))
                 {
                     var urlPhotos = DeserializeUrlPhotos(item.UrlPhotosJson);
                     if (urlPhotos != null && urlPhotos.Any())
                     {
-                        // Сериализуем список URL в JSON строку
-                        var urlPhotosJson = JsonSerializer.Serialize(urlPhotos);
-                        // Используем NomenclatureId как ключ для идентификации позиции
-                        var metadataKey = $"item_photos_{item.NomenclatureId}";
-                        createOrderRequest.Metadata[metadataKey] = urlPhotosJson;
+                        grpcItem.PhotoUrls.AddRange(urlPhotos);
                     }
                 }
+                
+                createOrderRequest.Items.Add(grpcItem);
             }
 
             _logger.LogInformation("Отправка заказа {OrderId} в FimBiz. CompanyId: {CompanyId}, ContractorId: {ContractorId}, ItemsCount: {ItemsCount}", 

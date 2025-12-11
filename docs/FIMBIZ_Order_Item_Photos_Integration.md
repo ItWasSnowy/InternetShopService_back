@@ -2,7 +2,7 @@
 
 ## Обзор
 
-При создании заказа из корзины интернет-магазина, фотографии товаров (URL фотографий) передаются в систему FimBiz через поле `metadata` в gRPC запросе `CreateOrderRequest`.
+При создании заказа из корзины интернет-магазина, фотографии товаров (URL фотографий) передаются в систему FimBiz через поле `photo_urls` в сообщении `OrderItem` gRPC запроса `CreateOrderRequest`.
 
 ## Поток данных
 
@@ -35,23 +35,23 @@
 
 ### 3. Отправка заказа в FimBiz
 
-При отправке заказа в FimBiz через gRPC метод `CreateOrder`, фотографии товаров добавляются в поле `metadata` запроса `CreateOrderRequest`.
+При отправке заказа в FimBiz через gRPC метод `CreateOrder`, фотографии товаров передаются напрямую в поле `photo_urls` каждой позиции заказа (`OrderItem`).
 
-## Формат данных в metadata
+## Формат данных в OrderItem
 
-Фотографии товаров передаются в `metadata` со следующими ключами:
+Фотографии товаров передаются как массив строк в поле `photo_urls` каждой позиции заказа.
 
-- **Ключ**: `item_photos_{NomenclatureId}`
-- **Значение**: JSON строка с массивом URL фотографий
+### Структура OrderItem с фотографиями
 
-Где `{NomenclatureId}` - это UUID номенклатуры из интернет-магазина.
-
-### Пример структуры metadata
-
-```json
-{
-  "item_photos_123e4567-e89b-12d3-a456-426614174000": "[\"https://example.com/photos/photo1.jpg\",\"https://example.com/photos/photo2.jpg\"]",
-  "item_photos_987e6543-e21b-34d5-b654-532125678901": "[\"https://example.com/photos/item2_photo1.jpg\"]"
+```protobuf
+message OrderItem {
+  optional int32 nomenclature_id = 1;
+  string name = 2;
+  int32 quantity = 3;
+  int64 price = 4;
+  bool is_available = 5;
+  bool requires_manufacturing = 6;
+  repeated string photo_urls = 7;  // URL фотографий товара
 }
 ```
 
@@ -61,11 +61,35 @@
 - `NomenclatureId`: `123e4567-e89b-12d3-a456-426614174000`
 - `UrlPhotos`: `["https://example.com/photo1.jpg", "https://example.com/photo2.jpg"]`
 
-То в `metadata` будет добавлено:
-```json
-{
-  "item_photos_123e4567-e89b-12d3-a456-426614174000": "[\"https://example.com/photo1.jpg\",\"https://example.com/photo2.jpg\"]"
+То в gRPC `OrderItem` будет:
+```protobuf
+OrderItem {
+  nomenclature_id: 12345
+  name: "Товар"
+  quantity: 2
+  price: 100000
+  is_available: true
+  requires_manufacturing: false
+  photo_urls: "https://example.com/photo1.jpg"
+  photo_urls: "https://example.com/photo2.jpg"
 }
+```
+
+В C# коде это будет:
+```csharp
+var grpcItem = new GrpcOrderItem
+{
+    NomenclatureId = 12345,
+    Name = "Товар",
+    Quantity = 2,
+    Price = 100000,
+    IsAvailable = true,
+    RequiresManufacturing = false
+};
+grpcItem.PhotoUrls.AddRange(new[] { 
+    "https://example.com/photo1.jpg", 
+    "https://example.com/photo2.jpg" 
+});
 ```
 
 ## Структура gRPC запроса
@@ -77,101 +101,73 @@ message CreateOrderRequest {
   int32 contractor_id = 3;
   string delivery_address = 4;
   DeliveryType delivery_type = 5;
-  repeated OrderItem items = 6;
+  repeated OrderItem items = 6;  // Каждая позиция содержит photo_urls
   optional string comment = 7;
   optional int32 organization_id = 8;
-  map<string, string> metadata = 9;  // <-- Фотографии передаются здесь
+  map<string, string> metadata = 9;
+}
+
+message OrderItem {
+  optional int32 nomenclature_id = 1;
+  string name = 2;
+  int32 quantity = 3;
+  int64 price = 4;
+  bool is_available = 5;
+  bool requires_manufacturing = 6;
+  repeated string photo_urls = 7;  // <-- Фотографии передаются здесь
 }
 ```
 
 ## Обработка на стороне FimBiz
 
-Для обработки фотографий товаров в FimBiz необходимо:
+Фотографии товаров передаются напрямую в поле `photo_urls` каждой позиции заказа, поэтому обработка очень проста:
 
-1. **Извлечь фотографии из metadata**:
-   - Искать ключи, начинающиеся с префикса `item_photos_`
-   - Извлечь `NomenclatureId` из ключа (часть после префикса)
-   - Десериализовать значение как JSON массив строк
+1. **Извлечь фотографии из OrderItem**:
+   - Каждая позиция заказа (`OrderItem`) содержит массив `photo_urls`
+   - Фотографии уже доступны как массив строк, не требуется дополнительная десериализация
 
-2. **Связать фотографии с позициями заказа**:
-   - Сопоставить `NomenclatureId` из ключа metadata с позициями заказа
-   - Сохранить фотографии в соответствующие позиции заказа
+2. **Сохранить фотографии**:
+   - Связать фотографии с соответствующей позицией заказа
+   - Фотографии находятся в той же позиции, что и остальные данные товара
 
-### Пример обработки (псевдокод)
+### Пример обработки
 
 ```python
 # Пример на Python
-import json
-
-def extract_item_photos_from_metadata(metadata: dict) -> dict:
+def process_order_items(order_request):
     """
-    Извлекает фотографии товаров из metadata.
-    
-    Возвращает словарь: {nomenclature_id: [list of photo URLs]}
+    Обрабатывает позиции заказа и извлекает фотографии.
     """
-    item_photos = {}
-    prefix = "item_photos_"
-    
-    for key, value in metadata.items():
-        if key.startswith(prefix):
-            nomenclature_id = key[len(prefix):]
-            try:
-                photo_urls = json.loads(value)
-                item_photos[nomenclature_id] = photo_urls
-            except json.JSONDecodeError:
-                # Обработка ошибки парсинга JSON
-                continue
-    
-    return item_photos
-
-# Использование
-metadata = {
-    "item_photos_123e4567-e89b-12d3-a456-426614174000": '["https://example.com/photo1.jpg","https://example.com/photo2.jpg"]',
-    "item_photos_987e6543-e21b-34d5-b654-532125678901": '["https://example.com/item2.jpg"]'
-}
-
-photos = extract_item_photos_from_metadata(metadata)
-# Результат:
-# {
-#   "123e4567-e89b-12d3-a456-426614174000": ["https://example.com/photo1.jpg", "https://example.com/photo2.jpg"],
-#   "987e6543-e21b-34d5-b654-532125678901": ["https://example.com/item2.jpg"]
-# }
+    for item in order_request.items:
+        # Фотографии уже доступны как список строк
+        photo_urls = list(item.photo_urls)
+        
+        # Сохранить фотографии для позиции заказа
+        save_item_photos(
+            item_id=item.nomenclature_id,
+            photo_urls=photo_urls
+        )
+        
+        print(f"Товар {item.name}: {len(photo_urls)} фотографий")
 ```
 
 ```csharp
 // Пример на C#
-using System.Text.Json;
-using System.Collections.Generic;
-using System.Linq;
-
-public Dictionary<string, List<string>> ExtractItemPhotosFromMetadata(
-    IDictionary<string, string> metadata)
+public void ProcessOrderItems(CreateOrderRequest request)
 {
-    var itemPhotos = new Dictionary<string, List<string>>();
-    const string prefix = "item_photos_";
-    
-    foreach (var kvp in metadata)
+    foreach (var item in request.Items)
     {
-        if (kvp.Key.StartsWith(prefix))
-        {
-            var nomenclatureId = kvp.Key.Substring(prefix.Length);
-            try
-            {
-                var photoUrls = JsonSerializer.Deserialize<List<string>>(kvp.Value);
-                if (photoUrls != null && photoUrls.Any())
-                {
-                    itemPhotos[nomenclatureId] = photoUrls;
-                }
-            }
-            catch (JsonException)
-            {
-                // Обработка ошибки парсинга JSON
-                continue;
-            }
-        }
+        // Фотографии уже доступны как коллекция строк
+        var photoUrls = item.PhotoUrls.ToList();
+        
+        // Сохранить фотографии для позиции заказа
+        SaveItemPhotos(
+            itemId: item.NomenclatureId,
+            photoUrls: photoUrls
+        );
+        
+        Console.WriteLine($"Товар {item.Name}: {photoUrls.Count} фотографий");
     }
-    
-    return itemPhotos;
 }
 ```
 
@@ -179,29 +175,44 @@ public Dictionary<string, List<string>> ExtractItemPhotosFromMetadata(
 
 1. **Формат URL**: Фотографии передаются как URL строки, а не как бинарные данные. FimBiz должен иметь возможность загрузить изображения по этим URL.
 
-2. **Кодирование JSON**: Значения в metadata хранятся как JSON строки (двойное кодирование):
-   - Сначала список URL сериализуется в JSON: `["url1", "url2"]`
-   - Затем эта строка передается как значение в metadata (строковый тип)
+2. **Прямая передача**: Фотографии передаются напрямую в поле `photo_urls` позиции заказа. Не требуется JSON сериализация или работа с metadata - это упрощает обработку на стороне FimBiz.
 
 3. **Сопоставление с позициями заказа**: 
-   - `NomenclatureId` в ключе metadata - это UUID из интернет-магазина
-   - В gRPC запросе `OrderItem.nomenclature_id` - это преобразованный `int32` (первые 4 байта UUID)
-   - Для сопоставления может потребоваться дополнительная логика или таблица соответствия
+   - Фотографии находятся непосредственно в той же позиции заказа (`OrderItem`), что и остальные данные товара
+   - Не требуется дополнительное сопоставление по ключам или ID
+   - `OrderItem.nomenclature_id` связывает позицию с номенклатурой
 
-4. **Опциональность**: Если у позиции заказа нет фотографий, соответствующая запись в metadata не добавляется.
+4. **Опциональность**: Если у позиции заказа нет фотографий, поле `photo_urls` будет пустым массивом или отсутствовать.
 
-5. **Множественные фотографии**: Одна позиция заказа может иметь несколько фотографий (массив URL).
+5. **Множественные фотографии**: Одна позиция заказа может иметь несколько фотографий - они передаются как массив строк в поле `photo_urls`.
 
 ## Проверка работоспособности
 
 Для проверки корректной передачи фотографий:
 
 1. Создайте тестовый заказ с товарами, имеющими фотографии
-2. Проверьте, что в `CreateOrderRequest.metadata` присутствуют ключи вида `item_photos_{UUID}`
-3. Проверьте, что значения являются валидными JSON массивами URL строк
-4. Убедитесь, что все URL доступны для загрузки
+2. Проверьте, что в каждой позиции `CreateOrderRequest.items` поле `photo_urls` содержит массив URL строк
+3. Убедитесь, что количество фотографий соответствует ожидаемому
+4. Проверьте, что все URL доступны для загрузки
+5. Убедитесь, что фотографии правильно связаны с соответствующими позициями заказа
+
+### Пример проверки
+
+```csharp
+// Проверка в коде
+foreach (var item in createOrderRequest.Items)
+{
+    Console.WriteLine($"Позиция: {item.Name}");
+    Console.WriteLine($"Фотографий: {item.PhotoUrls.Count}");
+    foreach (var url in item.PhotoUrls)
+    {
+        Console.WriteLine($"  - {url}");
+    }
+}
+```
 
 ## История изменений
 
-- **2024-12-XX**: Добавлена передача фотографий товаров через metadata в CreateOrderRequest
+- **2024-12-XX**: Изменена передача фотографий товаров с metadata на прямое поле `photo_urls` в `OrderItem`
+- **2024-12-XX**: Добавлено поле `repeated string photo_urls = 7` в proto определение `OrderItem`
 
