@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Grpc.Core;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc;
@@ -919,6 +920,7 @@ public class FimBizSyncService : BackgroundService
                     Price = (decimal)grpcItem.Price / 100, // Из копеек в рубли
                     DiscountPercent = 0, // TODO: получить из FimBiz если доступно
                     TotalAmount = (decimal)grpcItem.Price / 100 * grpcItem.Quantity,
+                    UrlPhotosJson = SerializeUrlPhotos(grpcItem.PhotoUrls.ToList()),
                     CreatedAt = DateTime.UtcNow
                 };
 
@@ -934,6 +936,26 @@ public class FimBizSyncService : BackgroundService
         {
             _logger.LogError(ex, "Ошибка при синхронизации позиций заказа {OrderId}", order.Id);
             // Не прерываем выполнение, просто логируем ошибку
+        }
+    }
+
+    /// <summary>
+    /// Сериализация списка URL фотографий в JSON строку
+    /// </summary>
+    private static string? SerializeUrlPhotos(List<string>? urlPhotos)
+    {
+        if (urlPhotos == null || !urlPhotos.Any())
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Serialize(urlPhotos);
+        }
+        catch
+        {
+            return null;
         }
     }
 
