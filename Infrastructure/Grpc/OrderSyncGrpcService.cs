@@ -280,6 +280,12 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // Сохраняем изменения (ВСЕГДА сохраняем, даже если статус не изменился, т.к. могут быть другие изменения)
             await _orderRepository.UpdateAsync(order);
 
+            // Отправляем уведомление при изменении статуса на ключевые статусы
+            if (oldStatus != newStatus && ShouldNotifyStatus(newStatus))
+            {
+                await SendOrderStatusNotificationAsync(order, newStatus);
+            }
+
             _logger.LogInformation("Заказ {OrderId} успешно обновлен. Статус: {OldStatus} -> {NewStatus}, FimBizOrderId: {FimBizOrderId}", 
                 orderId, oldStatus, newStatus, order.FimBizOrderId);
 
@@ -515,6 +521,12 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             if (request.Order.AttachedFiles != null && request.Order.AttachedFiles.Count > 0)
             {
                 await ProcessAttachedFilesAsync(order, request.Order.AttachedFiles);
+            }
+
+            // Отправляем уведомление при изменении статуса на ключевые статусы
+            if (oldStatus != order.Status && ShouldNotifyStatus(order.Status))
+            {
+                await SendOrderStatusNotificationAsync(order, order.Status);
             }
 
             // Проверяем, были ли реальные изменения
@@ -1128,6 +1140,70 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             _logger.LogError(ex, "Ошибка при сохранении файла {FileName} локально", fileName);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Проверка, нужно ли отправлять уведомление для данного статуса
+    /// </summary>
+    private static bool ShouldNotifyStatus(OrderStatus status)
+    {
+        // Уведомляем только в ключевых статусах согласно ТЗ:
+        // - когда заказ перешел на ожидание оплаты
+        // - когда заказ перешел на ожидание получения
+        return status == OrderStatus.AwaitingPayment ||
+               status == OrderStatus.AwaitingPickup;
+    }
+
+    /// <summary>
+    /// Отправка уведомления о изменении статуса заказа
+    /// </summary>
+    private async Task SendOrderStatusNotificationAsync(LocalOrder order, OrderStatus status)
+    {
+        try
+        {
+            // Получаем контрагента для получения email
+            var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
+            if (counterparty == null || string.IsNullOrEmpty(counterparty.Email))
+            {
+                _logger.LogWarning("Не удалось отправить уведомление для заказа {OrderId}: email контрагента не указан", order.Id);
+                return;
+            }
+
+            var statusName = GetStatusName(status);
+            await _emailService.SendOrderStatusNotificationAsync(
+                counterparty.Email,
+                order.Id,
+                statusName);
+            
+            _logger.LogInformation("Отправлено уведомление на email {Email} о изменении статуса заказа {OrderId} на {Status}", 
+                counterparty.Email, order.Id, statusName);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при отправке уведомления о изменении статуса заказа {OrderId}", order.Id);
+            // Не прерываем выполнение при ошибке отправки уведомления
+        }
+    }
+
+    /// <summary>
+    /// Получение названия статуса заказа
+    /// </summary>
+    private static string GetStatusName(OrderStatus status)
+    {
+        return status switch
+        {
+            OrderStatus.Processing => "Обрабатывается",
+            OrderStatus.AwaitingPayment => "Ожидает оплаты",
+            OrderStatus.InvoiceConfirmed => "Счет подтвержден",
+            OrderStatus.Manufacturing => "Изготавливается",
+            OrderStatus.Assembling => "Собирается",
+            OrderStatus.TransferredToCarrier => "Передан в транспортную компанию",
+            OrderStatus.DeliveringByCarrier => "Доставляется транспортной компанией",
+            OrderStatus.Delivering => "Доставляется",
+            OrderStatus.AwaitingPickup => "Ожидает получения",
+            OrderStatus.Received => "Получен",
+            _ => "Неизвестный статус"
+        };
     }
 }
 

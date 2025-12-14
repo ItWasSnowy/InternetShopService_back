@@ -33,6 +33,9 @@ public class UserAccountConfiguration : IEntityTypeConfiguration<UserAccount>
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasIndex(x => x.ShopId);
+
+        builder.Property(x => x.LastDeliveryType)
+            .HasConversion<int?>(); // Сохраняем как nullable int в БД
     }
 }
 

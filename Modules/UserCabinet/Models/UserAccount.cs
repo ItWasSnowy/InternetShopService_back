@@ -1,3 +1,4 @@
+using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Shared.Models;
 
 namespace InternetShopService_back.Modules.UserCabinet.Models;
@@ -40,6 +41,11 @@ public class UserAccount
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
+    
+    /// <summary>
+    /// Последний использованный способ доставки
+    /// </summary>
+    public DeliveryType? LastDeliveryType { get; set; }
 
     // Navigation properties
     public virtual Counterparty Counterparty { get; set; } = null!;

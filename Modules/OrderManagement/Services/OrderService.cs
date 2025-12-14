@@ -156,7 +156,12 @@ public class OrderService : IOrderService
 
         order = await _orderRepository.CreateAsync(order);
 
-        _logger.LogInformation("Создан заказ {OrderId} для пользователя {UserId}", order.Id, userId);
+        // Сохраняем последний использованный способ доставки
+        userAccount.LastDeliveryType = dto.DeliveryType;
+        await _userAccountRepository.UpdateAsync(userAccount);
+
+        _logger.LogInformation("Создан заказ {OrderId} для пользователя {UserId}. Сохранен способ доставки: {DeliveryType}", 
+            order.Id, userId, dto.DeliveryType);
 
         // Отправляем заказ в FimBiz
         try
@@ -289,11 +294,11 @@ public class OrderService : IOrderService
 
     private static bool ShouldNotifyStatus(OrderStatus status)
     {
-        // Уведомляем в ключевых статусах согласно ТЗ
+        // Уведомляем только в ключевых статусах согласно ТЗ:
+        // - когда заказ перешел на ожидание оплаты
+        // - когда заказ перешел на ожидание получения
         return status == OrderStatus.AwaitingPayment ||
-               status == OrderStatus.AwaitingPickup ||
-               status == OrderStatus.Received ||
-               status == OrderStatus.InvoiceConfirmed;
+               status == OrderStatus.AwaitingPickup;
     }
 
     private async Task<OrderDto> MapToOrderDtoAsync(LocalOrder order)
