@@ -658,7 +658,54 @@ if (refreshResponse.ok) {
 
 ---
 
-### 3.4. Создать адрес
+### 3.4. Получить последний способ доставки
+
+**GET** `/api/deliveryaddress/last-delivery-type`
+
+Возвращает последний использованный пользователем способ доставки. Используется для предзаполнения формы оформления заказа.
+
+**Успешный ответ (200 OK):**
+```json
+{
+  "lastDeliveryType": 1,
+  "lastDeliveryTypeName": "Самовывоз"
+}
+```
+
+**Поля ответа:**
+- `lastDeliveryType` (int?, nullable) - Числовое значение способа доставки:
+  - `1` - Самовывоз (Pickup)
+  - `2` - Транспортная компания (Carrier)
+  - `3` - Доставка средствами продавца (SellerDelivery)
+  - `null` - Способ доставки еще не использовался
+- `lastDeliveryTypeName` (string?, nullable) - Название способа доставки на русском языке или `null`
+
+**Пример использования:**
+```javascript
+const response = await fetch('/api/deliveryaddress/last-delivery-type', {
+  method: 'GET',
+  headers: {
+    'Authorization': `Bearer ${accessToken}`
+  }
+});
+
+const data = await response.json();
+if (data.lastDeliveryType) {
+  // Предзаполнить форму выбора способа доставки
+  setDeliveryType(data.lastDeliveryType);
+}
+```
+
+**Ошибки:**
+- `401 Unauthorized` - Пользователь не авторизован
+- `404 Not Found` - Пользователь не найден
+- `500 Internal Server Error` - Внутренняя ошибка сервера
+
+**Примечание:** Значение обновляется автоматически при создании каждого нового заказа.
+
+---
+
+### 3.5. Создать адрес
 
 **POST** `/api/deliveryaddress`
 
@@ -687,7 +734,7 @@ if (refreshResponse.ok) {
 
 ---
 
-### 3.5. Обновить адрес
+### 3.6. Обновить адрес
 
 **PUT** `/api/deliveryaddress/{id}`
 
@@ -705,7 +752,7 @@ if (refreshResponse.ok) {
 
 ---
 
-### 3.6. Удалить адрес
+### 3.7. Удалить адрес
 
 **DELETE** `/api/deliveryaddress/{id}`
 
@@ -719,7 +766,7 @@ if (refreshResponse.ok) {
 
 ---
 
-### 3.7. Установить адрес по умолчанию
+### 3.8. Установить адрес по умолчанию
 
 **PUT** `/api/deliveryaddress/{id}/set-default`
 

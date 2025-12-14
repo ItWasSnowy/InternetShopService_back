@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Helpers;
+using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Services;
 
 namespace InternetShopService_back.Modules.UserCabinet.Controllers;
@@ -12,10 +14,14 @@ namespace InternetShopService_back.Modules.UserCabinet.Controllers;
 public class DeliveryAddressController : ControllerBase
 {
     private readonly IDeliveryAddressService _addressService;
+    private readonly IUserAccountRepository _userAccountRepository;
 
-    public DeliveryAddressController(IDeliveryAddressService addressService)
+    public DeliveryAddressController(
+        IDeliveryAddressService addressService,
+        IUserAccountRepository userAccountRepository)
     {
         _addressService = addressService;
+        _userAccountRepository = userAccountRepository;
     }
 
     [HttpGet]
@@ -187,6 +193,48 @@ public class DeliveryAddressController : ControllerBase
         {
             return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
         }
+    }
+
+    [HttpGet("last-delivery-type")]
+    public async Task<IActionResult> GetLastDeliveryType()
+    {
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var userAccount = await _userAccountRepository.GetByIdAsync(userId.Value);
+            if (userAccount == null)
+            {
+                return NotFound(new { error = "Пользователь не найден" });
+            }
+
+            return Ok(new
+            {
+                lastDeliveryType = userAccount.LastDeliveryType,
+                lastDeliveryTypeName = userAccount.LastDeliveryType.HasValue
+                    ? GetDeliveryTypeName(userAccount.LastDeliveryType.Value)
+                    : null
+            });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
+    }
+
+    private static string GetDeliveryTypeName(DeliveryType deliveryType)
+    {
+        return deliveryType switch
+        {
+            DeliveryType.Pickup => "Самовывоз",
+            DeliveryType.Carrier => "Транспортная компания",
+            DeliveryType.SellerDelivery => "Доставка средствами продавца",
+            _ => "Неизвестный способ доставки"
+        };
     }
 }
 

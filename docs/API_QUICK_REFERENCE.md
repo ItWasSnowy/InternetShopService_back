@@ -47,6 +47,7 @@ Authorization: Bearer {accessToken}
 | GET | `/api/deliveryaddress` | Список адресов | ✅ |
 | GET | `/api/deliveryaddress/{id}` | Адрес по ID | ✅ |
 | GET | `/api/deliveryaddress/default` | Адрес по умолчанию | ✅ |
+| GET | `/api/deliveryaddress/last-delivery-type` | Последний способ доставки | ✅ |
 | POST | `/api/deliveryaddress` | Создать адрес | ✅ |
 | PUT | `/api/deliveryaddress/{id}` | Обновить адрес | ✅ |
 | DELETE | `/api/deliveryaddress/{id}` | Удалить адрес | ✅ |
