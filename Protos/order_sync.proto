@@ -48,6 +48,8 @@ message CreateOrderRequest {
 
   map<string, string> metadata = 9;      // Дополнительные метаданные
 
+  repeated AttachedFile attached_files = 10; // Прикрепленные файлы из интернет-магазина
+
 }
 
 // Ответ на создание заказа
@@ -149,6 +151,20 @@ message Order {
   optional int64 shipped_at = 22;        // Unix timestamp отправки
 
   optional int64 delivered_at = 23;      // Unix timestamp доставки
+
+  repeated AttachedFile attached_files = 24; // Прикрепленные файлы (абсолютные URL)
+
+}
+
+// Прикрепленный файл к заказу
+
+message AttachedFile {
+
+  string file_name = 1;                  // Имя файла (например, "invoice.pdf")
+
+  string content_type = 2;               // MIME-тип файла (например, "application/pdf")
+
+  string url = 3;                        // Абсолютный URL файла (например, "https://shop.example.com/files/order_123/invoice.pdf")
 
 }
 

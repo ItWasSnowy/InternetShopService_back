@@ -18,6 +18,7 @@ using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order
 using LocalOrderItem = InternetShopService_back.Modules.OrderManagement.Models.OrderItem;
 using GrpcOrder = InternetShopService_back.Infrastructure.Grpc.Orders.Order;
 using GrpcOrderItem = InternetShopService_back.Infrastructure.Grpc.Orders.OrderItem;
+using GrpcAttachedFile = InternetShopService_back.Infrastructure.Grpc.Orders.AttachedFile;
 
 namespace InternetShopService_back.Infrastructure.Grpc;
 
@@ -337,6 +338,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 _logger.LogInformation("Request.Order.HasBillInfo: {HasBillInfo}", request.Order.BillInfo != null);
                 _logger.LogInformation("Request.Order.HasUpdInfo: {HasUpdInfo}", request.Order.UpdInfo != null);
                 _logger.LogInformation("Request.Order.Items.Count: {ItemsCount}", request.Order.Items?.Count ?? 0);
+                _logger.LogInformation("Request.Order.AttachedFiles.Count: {AttachedFilesCount}", request.Order.AttachedFiles?.Count ?? 0);
             }
             else
             {
@@ -509,6 +511,12 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 await SyncOrderItemsAsync(order, request.Order.Items);
             }
 
+            // Обрабатываем прикрепленные файлы
+            if (request.Order.AttachedFiles != null && request.Order.AttachedFiles.Count > 0)
+            {
+                await ProcessAttachedFilesAsync(order, request.Order.AttachedFiles);
+            }
+
             // Проверяем, были ли реальные изменения
             bool hasChanges = oldStatus != order.Status
                 || oldTotalAmount != order.TotalAmount
@@ -524,7 +532,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 || oldDeliveredAt != order.DeliveredAt
                 || request.Order.BillInfo != null
                 || request.Order.UpdInfo != null
-                || (request.Order.Items != null && request.Order.Items.Count > 0);
+                || (request.Order.Items != null && request.Order.Items.Count > 0)
+                || (request.Order.AttachedFiles != null && request.Order.AttachedFiles.Count > 0);
 
             if (!hasChanges)
             {
@@ -975,6 +984,150 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             GrpcDeliveryType.TransportCompany => LocalDeliveryType.Carrier,
             _ => LocalDeliveryType.Pickup // По умолчанию самовывоз
         };
+    }
+
+    /// <summary>
+    /// Обработка прикрепленных файлов из FimBiz
+    /// </summary>
+    private async Task ProcessAttachedFilesAsync(LocalOrder order, IEnumerable<GrpcAttachedFile> attachedFiles)
+    {
+        try
+        {
+            // Загружаем существующие файлы заказа
+            await _dbContext.Entry(order).Collection(o => o.Attachments).LoadAsync();
+
+            foreach (var file in attachedFiles)
+            {
+                try
+                {
+                    // Проверяем, есть ли уже такой файл по URL
+                    var existingFile = order.Attachments
+                        .FirstOrDefault(a => a.FilePath.Contains(file.Url) || file.Url.Contains(a.FilePath));
+
+                    if (existingFile != null)
+                    {
+                        _logger.LogDebug("Файл {FileName} уже существует для заказа {OrderId}, пропускаем", 
+                            file.FileName, order.Id);
+                        continue;
+                    }
+
+                    // Загружаем файл по URL
+                    var fileBytes = await DownloadFileAsync(file.Url);
+                    if (fileBytes == null || fileBytes.Length == 0)
+                    {
+                        _logger.LogWarning("Не удалось загрузить файл {FileName} по URL {Url} для заказа {OrderId}", 
+                            file.FileName, file.Url, order.Id);
+                        continue;
+                    }
+
+                    // Сохраняем файл локально
+                    var localPath = await SaveFileLocallyAsync(order.Id, file.FileName, fileBytes);
+                    if (string.IsNullOrEmpty(localPath))
+                    {
+                        _logger.LogWarning("Не удалось сохранить файл {FileName} локально для заказа {OrderId}", 
+                            file.FileName, order.Id);
+                        continue;
+                    }
+
+                    // Создаем запись в БД
+                    var attachment = new OrderAttachment
+                    {
+                        Id = Guid.NewGuid(),
+                        OrderId = order.Id,
+                        FileName = file.FileName,
+                        FilePath = localPath,
+                        ContentType = file.ContentType,
+                        FileSize = fileBytes.Length,
+                        IsVisibleToCustomer = true, // По умолчанию файлы от FimBiz видимы клиенту
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    await _dbContext.OrderAttachments.AddAsync(attachment);
+                    order.Attachments.Add(attachment);
+
+                    _logger.LogInformation("Файл {FileName} успешно загружен и сохранен для заказа {OrderId}", 
+                        file.FileName, order.Id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Ошибка при обработке файла {FileName} для заказа {OrderId}", 
+                        file.FileName, order.Id);
+                    // Продолжаем обработку других файлов
+                }
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation("Обработано {Count} файлов для заказа {OrderId}", 
+                attachedFiles.Count(), order.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при обработке прикрепленных файлов для заказа {OrderId}", order.Id);
+            // Не прерываем выполнение, просто логируем ошибку
+        }
+    }
+
+    /// <summary>
+    /// Загрузка файла по URL
+    /// </summary>
+    private async Task<byte[]?> DownloadFileAsync(string url)
+    {
+        try
+        {
+            using var httpClient = new HttpClient();
+            httpClient.Timeout = TimeSpan.FromMinutes(5); // Таймаут 5 минут для больших файлов
+
+            var response = await httpClient.GetAsync(url);
+            response.EnsureSuccessStatusCode();
+
+            return await response.Content.ReadAsByteArrayAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при загрузке файла по URL {Url}", url);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Сохранение файла локально
+    /// </summary>
+    private async Task<string?> SaveFileLocallyAsync(Guid orderId, string fileName, byte[] fileBytes)
+    {
+        try
+        {
+            // Получаем путь для сохранения файлов из конфигурации
+            var uploadsPath = _configuration["AppSettings:UploadsPath"] 
+                ?? _configuration["AppSettings:FilesPath"]
+                ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "orders");
+
+            // Создаем директорию для заказа, если её нет
+            var orderDirectory = Path.Combine(uploadsPath, orderId.ToString());
+            Directory.CreateDirectory(orderDirectory);
+
+            // Генерируем уникальное имя файла (добавляем timestamp для избежания конфликтов)
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+            var safeFileName = Path.GetFileNameWithoutExtension(fileName);
+            var extension = Path.GetExtension(fileName);
+            var uniqueFileName = $"{safeFileName}_{timestamp}{extension}";
+
+            var filePath = Path.Combine(orderDirectory, uniqueFileName);
+
+            // Сохраняем файл
+            await File.WriteAllBytesAsync(filePath, fileBytes);
+
+            // Возвращаем относительный путь для хранения в БД
+            var relativePath = Path.Combine("uploads", "orders", orderId.ToString(), uniqueFileName)
+                .Replace('\\', '/');
+
+            return relativePath;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при сохранении файла {FileName} локально", fileName);
+            return null;
+        }
     }
 }
 

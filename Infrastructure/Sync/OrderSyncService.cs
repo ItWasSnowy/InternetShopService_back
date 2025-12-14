@@ -14,6 +14,7 @@ using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order
 using LocalDeliveryType = InternetShopService_back.Modules.OrderManagement.Models.DeliveryType;
 using GrpcDeliveryType = InternetShopService_back.Infrastructure.Grpc.Orders.DeliveryType;
 using GrpcOrderItem = InternetShopService_back.Infrastructure.Grpc.Orders.OrderItem;
+using AttachedFile = InternetShopService_back.Infrastructure.Grpc.Orders.AttachedFile;
 
 namespace InternetShopService_back.Infrastructure.Sync;
 
@@ -174,6 +175,12 @@ public class OrderSyncService : BackgroundService
                 }
             }
 
+            // Загружаем прикрепленные файлы
+            if (order.Attachments == null || !order.Attachments.Any())
+            {
+                await context.Entry(order).Collection(o => o.Attachments).LoadAsync();
+            }
+
             // Получаем контрагента
             var counterparty = await counterpartyRepository.GetByIdAsync(order.CounterpartyId);
             if (counterparty == null || !counterparty.FimBizContractorId.HasValue || counterparty.FimBizContractorId.Value <= 0)
@@ -257,9 +264,37 @@ public class OrderSyncService : BackgroundService
                 createOrderRequest.Items.Add(grpcItem);
             }
 
+            // Добавляем прикрепленные файлы (если есть)
+            if (order.Attachments != null && order.Attachments.Any())
+            {
+                var baseUrl = _configuration["AppSettings:BaseUrl"] 
+                    ?? _configuration["AppSettings:PublicUrl"]
+                    ?? throw new InvalidOperationException("AppSettings:BaseUrl или AppSettings:PublicUrl должен быть настроен для отправки файлов");
+
+                foreach (var attachment in order.Attachments)
+                {
+                    // Формируем абсолютный URL для файла
+                    var fileUrl = GetPublicFileUrl(baseUrl, attachment.FilePath);
+                    
+                    var attachedFile = new AttachedFile
+                    {
+                        FileName = attachment.FileName,
+                        ContentType = attachment.ContentType,
+                        Url = fileUrl
+                    };
+
+                    createOrderRequest.AttachedFiles.Add(attachedFile);
+                }
+
+                _logger.LogInformation(
+                    "Добавлено {FilesCount} прикрепленных файлов к заказу {OrderId}",
+                    order.Attachments.Count, order.Id);
+            }
+
             _logger.LogInformation(
-                "Отправка заказа {OrderId} в FimBiz. CompanyId: {CompanyId}, ContractorId: {ContractorId}, ItemsCount: {ItemsCount}",
-                order.Id, shop.FimBizCompanyId, counterparty.FimBizContractorId.Value, order.Items.Count);
+                "Отправка заказа {OrderId} в FimBiz. CompanyId: {CompanyId}, ContractorId: {ContractorId}, ItemsCount: {ItemsCount}, FilesCount: {FilesCount}",
+                order.Id, shop.FimBizCompanyId, counterparty.FimBizContractorId.Value, order.Items.Count, 
+                order.Attachments?.Count ?? 0);
 
             // Отправляем в FimBiz
             var response = await fimBizGrpcClient.CreateOrderAsync(createOrderRequest);
@@ -304,6 +339,26 @@ public class OrderSyncService : BackgroundService
             _logger.LogError(ex, "Неожиданная ошибка при отправке заказа {OrderId} в FimBiz", order.Id);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Преобразует локальный путь файла в абсолютный публичный URL
+    /// </summary>
+    private static string GetPublicFileUrl(string baseUrl, string filePath)
+    {
+        // Убираем базовый URL из начала, если он есть
+        baseUrl = baseUrl.TrimEnd('/');
+        
+        // Если filePath уже является абсолютным URL, возвращаем его
+        if (filePath.StartsWith("http://") || filePath.StartsWith("https://"))
+        {
+            return filePath;
+        }
+
+        // Убираем начальные слэши из filePath
+        var relativePath = filePath.TrimStart('/', '\\').Replace('\\', '/');
+        
+        return $"{baseUrl}/{relativePath}";
     }
 }
 
