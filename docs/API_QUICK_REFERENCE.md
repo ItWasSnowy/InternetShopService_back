@@ -40,6 +40,18 @@ Authorization: Bearer {accessToken}
 
 ---
 
+## Заказы
+
+| Метод | Endpoint | Описание | Auth |
+|-------|----------|----------|------|
+| GET | `/api/orders` | Список заказов (с пагинацией) | ✅ |
+| GET | `/api/orders/{id}` | Заказ по ID | ✅ |
+| POST | `/api/orders/{id}/request-invoice-confirmation-code` | Запрос звонка для подтверждения счета | ✅ |
+| POST | `/api/orders/{id}/confirm-invoice` | Подтверждение счета по коду | ✅ |
+| PUT | `/api/orders/{id}/status` | Обновить статус заказа | ✅ |
+
+---
+
 ## Адреса доставки
 
 | Метод | Endpoint | Описание | Auth |

@@ -12,5 +12,15 @@ public interface IOrderService
     Task<List<OrderDto>> GetOrdersByUserAsync(Guid userId);
     Task<PagedResult<OrderDto>> GetOrdersByUserPagedAsync(Guid userId, int page, int pageSize);
     Task<OrderDto> UpdateOrderStatusAsync(Guid orderId, OrderStatus status);
+    
+    /// <summary>
+    /// Запрашивает звонок для подтверждения счета (для постоплаты)
+    /// </summary>
+    Task RequestInvoiceConfirmationCodeAsync(Guid orderId, Guid userId);
+    
+    /// <summary>
+    /// Подтверждает счет по коду из звонка (для постоплаты)
+    /// </summary>
+    Task<OrderDto> ConfirmInvoiceByPhoneAsync(Guid orderId, Guid userId, string code);
 }
 

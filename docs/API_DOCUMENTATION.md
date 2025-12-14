@@ -605,7 +605,208 @@ if (refreshResponse.ok) {
 
 ---
 
-## 3. Адреса доставки (`/api/deliveryaddress`)
+## 3. Заказы (`/api/orders`)
+
+Все эндпоинты требуют авторизации.
+
+### 3.1. Получить список заказов
+
+**GET** `/api/orders?page=1&pageSize=20`
+
+Возвращает список заказов текущего пользователя с пагинацией.
+
+**Параметры запроса:**
+- `page` (int, optional) - Номер страницы (по умолчанию: 1)
+- `pageSize` (int, optional) - Размер страницы (по умолчанию: 20, максимум: 100)
+
+**Успешный ответ (200 OK):**
+```json
+{
+  "items": [
+    {
+      "id": "123e4567-e89b-12d3-a456-426614174006",
+      "orderNumber": "ORD-2024-001",
+      "status": "AwaitingPayment",
+      "statusName": "Ожидает оплаты/Подтверждения счета",
+      "deliveryType": "SelfPickup",
+      "totalAmount": 1800.00,
+      "createdAt": "2024-01-15T10:30:00Z",
+      "items": [...],
+      "deliveryAddress": {...},
+      "cargoReceiver": {...},
+      "invoice": {
+        "pdfUrl": "/Files/OrderFiles/123/bill.pdf"
+      }
+    }
+  ],
+  "totalCount": 10,
+  "page": 1,
+  "pageSize": 20,
+  "totalPages": 1,
+  "hasPreviousPage": false,
+  "hasNextPage": false
+}
+```
+
+---
+
+### 3.2. Получить заказ по ID
+
+**GET** `/api/orders/{id}`
+
+**Параметры URL:**
+- `id` (Guid) - ID заказа
+
+**Успешный ответ (200 OK):**
+Возвращает объект заказа (формат как в списке)
+
+**Ошибки:**
+- `401 Unauthorized` - Пользователь не авторизован
+- `404 Not Found` - Заказ не найден
+
+---
+
+### 3.3. Запрос звонка для подтверждения счета (постоплата)
+
+**POST** `/api/orders/{id}/request-invoice-confirmation-code`
+
+Запрашивает звонок с кодом подтверждения для подтверждения счета. Доступно только для контрагентов с постоплатой (`HasPostPayment = true`) и заказов со статусом `AwaitingPayment`.
+
+**Параметры URL:**
+- `id` (Guid) - ID заказа
+
+**Успешный ответ (200 OK):**
+```json
+{
+  "message": "Код подтверждения отправлен на ваш номер телефона"
+}
+```
+
+**Ошибки:**
+- `400 Bad Request` - Заказ не найден, неверный статус заказа, у контрагента нет постоплаты, или ошибка отправки звонка
+- `401 Unauthorized` - Пользователь не авторизован или заказ не принадлежит пользователю
+- `500 Internal Server Error` - Внутренняя ошибка сервера
+
+**Пример использования:**
+```javascript
+const response = await fetch(`/api/orders/${orderId}/request-invoice-confirmation-code`, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${accessToken}`
+  }
+});
+
+if (response.ok) {
+  // Код отправлен, показать форму ввода кода
+  showCodeInputForm();
+} else {
+  const error = await response.json();
+  alert(error.error);
+}
+```
+
+**Примечания:**
+- Код действителен в течение 30 минут
+- Если лимит звонков исчерпан, будет возвращена ошибка с указанием времени ожидания
+
+---
+
+### 3.4. Подтверждение счета по коду из звонка (постоплата)
+
+**POST** `/api/orders/{id}/confirm-invoice`
+
+Подтверждает счет по коду из звонка. После успешного подтверждения статус заказа изменяется на `InvoiceConfirmed` (Счет подтвержден). Доступно только для контрагентов с постоплатой и заказов со статусом `AwaitingPayment`.
+
+**Параметры URL:**
+- `id` (Guid) - ID заказа
+
+**Тело запроса:**
+```json
+{
+  "code": "1234"
+}
+```
+
+**Параметры:**
+- `code` (string, required) - 4-значный код из звонка
+
+**Успешный ответ (200 OK):**
+Возвращает обновленный объект заказа со статусом `InvoiceConfirmed`:
+```json
+{
+  "id": "123e4567-e89b-12d3-a456-426614174006",
+  "orderNumber": "ORD-2024-001",
+  "status": "InvoiceConfirmed",
+  "statusName": "Счет подтвержден",
+  ...
+}
+```
+
+**Ошибки:**
+- `400 Bad Request` - Неверный формат кода, заказ не найден, неверный статус заказа, или у контрагента нет постоплаты
+- `401 Unauthorized` - Пользователь не авторизован, заказ не принадлежит пользователю, или неверный/истекший код
+- `500 Internal Server Error` - Внутренняя ошибка сервера
+
+**Пример использования:**
+```javascript
+const response = await fetch(`/api/orders/${orderId}/confirm-invoice`, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${accessToken}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    code: '1234'
+  })
+});
+
+if (response.ok) {
+  const order = await response.json();
+  // Заказ подтвержден, статус изменен на InvoiceConfirmed
+  alert('Счет успешно подтвержден!');
+  updateOrderStatus(order);
+} else {
+  const error = await response.json();
+  if (response.status === 401) {
+    // Неверный или истекший код
+    alert('Неверный код. Запросите новый звонок.');
+  } else {
+    alert(error.error);
+  }
+}
+```
+
+**Примечания:**
+- После подтверждения счета заказ переходит в статус `InvoiceConfirmed`
+- Для перехода к следующему статусу (например, `Manufacturing` или `Assembling`) требуется подтверждение администратора
+- Код можно использовать только один раз
+- Если код истек (прошло более 30 минут), необходимо запросить новый звонок
+
+---
+
+### 3.5. Обновить статус заказа
+
+**PUT** `/api/orders/{id}/status`
+
+**Параметры URL:**
+- `id` (Guid) - ID заказа
+
+**Тело запроса:**
+```json
+{
+  "status": "Assembling"
+}
+```
+
+**Успешный ответ (200 OK):**
+Возвращает обновленный заказ
+
+**Ошибки:**
+- `400 Bad Request` - Неверный статус или заказ не найден
+
+---
+
+## 4. Адреса доставки (`/api/deliveryaddress`)
 
 Все эндпоинты требуют авторизации.
 

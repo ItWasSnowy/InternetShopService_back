@@ -91,5 +91,72 @@ public class OrdersController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+
+    /// <summary>
+    /// Запрос звонка для подтверждения счета (для постоплаты)
+    /// </summary>
+    [HttpPost("{id}/request-invoice-confirmation-code")]
+    public async Task<IActionResult> RequestInvoiceConfirmationCode(Guid id)
+    {
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            await _orderService.RequestInvoiceConfirmationCodeAsync(id, userId.Value);
+            return Ok(new { message = "Код подтверждения отправлен на ваш номер телефона" });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
+    }
+
+    /// <summary>
+    /// Подтверждение счета по коду из звонка (для постоплаты)
+    /// </summary>
+    [HttpPost("{id}/confirm-invoice")]
+    public async Task<IActionResult> ConfirmInvoiceByPhone(Guid id, [FromBody] ConfirmInvoiceByPhoneDto dto)
+    {
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var order = await _orderService.ConfirmInvoiceByPhoneAsync(id, userId.Value, dto.Code);
+            return Ok(order);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
+    }
 }
 

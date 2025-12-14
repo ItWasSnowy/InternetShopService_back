@@ -1,5 +1,6 @@
 using System.Text.Json;
 using InternetShopService_back.Data;
+using InternetShopService_back.Infrastructure.Calls;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Infrastructure.Notifications;
@@ -35,9 +36,11 @@ public class OrderService : IOrderService
     private readonly IShopRepository _shopRepository;
     private readonly IFimBizGrpcClient _fimBizGrpcClient;
     private readonly IEmailService _emailService;
+    private readonly ICallService _callService;
     private readonly ApplicationDbContext _context;
     private readonly ILogger<OrderService> _logger;
     private readonly IConfiguration _configuration;
+    private const int _codeExpirationMinutes = 30; // Время действия кода подтверждения
 
     public OrderService(
         IOrderRepository orderRepository,
@@ -48,6 +51,7 @@ public class OrderService : IOrderService
         IShopRepository shopRepository,
         IFimBizGrpcClient fimBizGrpcClient,
         IEmailService emailService,
+        ICallService callService,
         ApplicationDbContext context,
         ILogger<OrderService> logger,
         IConfiguration configuration)
@@ -60,6 +64,7 @@ public class OrderService : IOrderService
         _shopRepository = shopRepository;
         _fimBizGrpcClient = fimBizGrpcClient;
         _emailService = emailService;
+        _callService = callService;
         _context = context;
         _logger = logger;
         _configuration = configuration;
@@ -829,5 +834,148 @@ public class OrderService : IOrderService
         {
             return new List<string>();
         }
+    }
+
+    public async Task RequestInvoiceConfirmationCodeAsync(Guid orderId, Guid userId)
+    {
+        // Получаем заказ
+        var order = await _orderRepository.GetByIdAsync(orderId);
+        if (order == null)
+            throw new InvalidOperationException("Заказ не найден");
+
+        // Проверяем, что заказ принадлежит пользователю
+        if (order.UserAccountId != userId)
+            throw new UnauthorizedAccessException("Заказ не принадлежит текущему пользователю");
+
+        // Проверяем статус заказа - должен быть AwaitingPayment
+        if (order.Status != OrderStatus.AwaitingPayment)
+            throw new InvalidOperationException("Подтверждение счета возможно только для заказов со статусом 'Ожидает оплаты/Подтверждения счета'");
+
+        // Получаем контрагента
+        var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
+        if (counterparty == null)
+            throw new InvalidOperationException("Контрагент не найден");
+
+        // Проверяем, что у контрагента есть постоплата
+        if (!counterparty.HasPostPayment)
+            throw new InvalidOperationException("Подтверждение счета через звонок доступно только для контрагентов с постоплатой");
+
+        // Получаем пользователя для получения номера телефона
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+            throw new InvalidOperationException("Пользователь не найден");
+
+        if (string.IsNullOrEmpty(userAccount.PhoneNumber))
+            throw new InvalidOperationException("Номер телефона пользователя не указан");
+
+        // Отправляем звонок
+        var callRequest = new CallRequestDto { PhoneNumber = userAccount.PhoneNumber };
+        var callResult = await _callService.SendCallAndUpdateUserAsync(callRequest, userAccount);
+
+        if (!callResult.Success)
+        {
+            if (callResult.IsCallLimitExceeded)
+            {
+                throw new InvalidOperationException(
+                    $"Заявки на звонок были исчерпаны. Попробуйте ещё раз через {callResult.RemainingWaitTimeMinutes} минут");
+            }
+            throw new InvalidOperationException(callResult.Message ?? "Не удалось отправить звонок");
+        }
+
+        if (string.IsNullOrEmpty(callResult.LastFourDigits))
+        {
+            throw new InvalidOperationException("Не удалось получить код подтверждения");
+        }
+
+        // Сохраняем обновленного пользователя
+        await _userAccountRepository.UpdateAsync(userAccount);
+
+        _logger.LogInformation("Код подтверждения счета отправлен на номер {PhoneNumber} для заказа {OrderId}", 
+            userAccount.PhoneNumber, orderId);
+    }
+
+    public async Task<OrderDto> ConfirmInvoiceByPhoneAsync(Guid orderId, Guid userId, string code)
+    {
+        // Получаем заказ
+        var order = await _orderRepository.GetByIdAsync(orderId);
+        if (order == null)
+            throw new InvalidOperationException("Заказ не найден");
+
+        // Проверяем, что заказ принадлежит пользователю
+        if (order.UserAccountId != userId)
+            throw new UnauthorizedAccessException("Заказ не принадлежит текущему пользователю");
+
+        // Проверяем статус заказа - должен быть AwaitingPayment
+        if (order.Status != OrderStatus.AwaitingPayment)
+            throw new InvalidOperationException("Подтверждение счета возможно только для заказов со статусом 'Ожидает оплаты/Подтверждения счета'");
+
+        // Получаем контрагента
+        var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
+        if (counterparty == null)
+            throw new InvalidOperationException("Контрагент не найден");
+
+        // Проверяем, что у контрагента есть постоплата
+        if (!counterparty.HasPostPayment)
+            throw new InvalidOperationException("Подтверждение счета через звонок доступно только для контрагентов с постоплатой");
+
+        // Получаем пользователя для проверки кода
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+            throw new InvalidOperationException("Пользователь не найден");
+
+        // Проверка кода
+        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(userAccount.PhoneCallDigits))
+        {
+            throw new UnauthorizedAccessException("Неверный код подтверждения");
+        }
+
+        // Проверка времени действия кода (30 минут)
+        if (!userAccount.PhoneCallDateTime.HasValue ||
+            (DateTime.UtcNow - userAccount.PhoneCallDateTime.Value).TotalMinutes > _codeExpirationMinutes)
+        {
+            throw new UnauthorizedAccessException("Истекло время действия кода. Запросите новый звонок");
+        }
+
+        // Сравнение кода
+        if (userAccount.PhoneCallDigits != code)
+        {
+            throw new UnauthorizedAccessException("Неверный код подтверждения");
+        }
+
+        // Очистка кода после успешной проверки
+        userAccount.PhoneCallDigits = null;
+        userAccount.PhoneCallDateTime = null;
+        await _userAccountRepository.UpdateAsync(userAccount);
+
+        // Обновляем статус заказа на InvoiceConfirmed
+        var oldStatus = order.Status;
+        order.Status = OrderStatus.InvoiceConfirmed;
+        order.UpdatedAt = DateTime.UtcNow;
+
+        // Добавляем запись в историю статусов
+        var statusHistory = new OrderStatusHistory
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            Status = OrderStatus.InvoiceConfirmed,
+            ChangedAt = DateTime.UtcNow
+        };
+        order.StatusHistory.Add(statusHistory);
+
+        order = await _orderRepository.UpdateAsync(order);
+
+        _logger.LogInformation("Счет для заказа {OrderId} подтвержден пользователем {UserId}. Статус изменен с {OldStatus} на {NewStatus}", 
+            orderId, userId, oldStatus, order.Status);
+
+        // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
+        if (order.FimBizOrderId.HasValue)
+        {
+            await SendOrderStatusUpdateToFimBizAsync(order, OrderStatus.InvoiceConfirmed);
+        }
+
+        // Отправляем уведомление на email контрагента
+        await SendOrderStatusNotificationAsync(order);
+
+        return await MapToOrderDtoAsync(order);
     }
 }
