@@ -2,10 +2,14 @@ using System.Linq;
 using System.Text.Json;
 using Grpc.Core;
 using InternetShopService_back.Data;
+using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Infrastructure.Notifications;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
+using InternetShopService_back.Modules.UserCabinet.Models;
+using InternetShopService_back.Modules.UserCabinet.Repositories;
+using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Shared.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -33,6 +37,9 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     private readonly ApplicationDbContext _dbContext;
     private readonly IEmailService _emailService;
     private readonly ICounterpartyRepository _counterpartyRepository;
+    private readonly IShopRepository _shopRepository;
+    private readonly IFimBizGrpcClient _fimBizGrpcClient;
+    private readonly IUserAccountRepository _userAccountRepository;
 
     public OrderSyncGrpcService(
         IOrderRepository orderRepository,
@@ -40,7 +47,10 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         IConfiguration configuration,
         ApplicationDbContext dbContext,
         IEmailService emailService,
-        ICounterpartyRepository counterpartyRepository)
+        ICounterpartyRepository counterpartyRepository,
+        IShopRepository shopRepository,
+        IFimBizGrpcClient fimBizGrpcClient,
+        IUserAccountRepository userAccountRepository)
     {
         _orderRepository = orderRepository;
         _logger = logger;
@@ -48,6 +58,9 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         _dbContext = dbContext;
         _emailService = emailService;
         _counterpartyRepository = counterpartyRepository;
+        _shopRepository = shopRepository;
+        _fimBizGrpcClient = fimBizGrpcClient;
+        _userAccountRepository = userAccountRepository;
     }
 
     /// <summary>
@@ -387,8 +400,24 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             _logger.LogInformation("Получено уведомление об обновлении заказа {ExternalOrderId} от FimBiz", 
                 request.Order.ExternalOrderId);
 
-            // Парсим external_order_id как Guid
-            if (!Guid.TryParse(request.Order.ExternalOrderId, out var orderId))
+            // Парсим external_order_id - может быть Guid или FIMBIZ-{orderId}
+            Guid orderId;
+            bool isNewOrder = false;
+            
+            if (Guid.TryParse(request.Order.ExternalOrderId, out var parsedGuid))
+            {
+                // Стандартный формат - Guid (заказ создан в интернет-магазине)
+                orderId = parsedGuid;
+            }
+            else if (request.Order.ExternalOrderId.StartsWith("FIMBIZ-", StringComparison.OrdinalIgnoreCase))
+            {
+                // Формат FIMBIZ-{orderId} - заказ создан в FimBiz, генерируем новый Guid
+                orderId = Guid.NewGuid();
+                isNewOrder = true;
+                _logger.LogInformation("Обнаружен заказ, созданный в FimBiz. ExternalOrderId: {ExternalOrderId}, Создан новый локальный OrderId: {OrderId}",
+                    request.Order.ExternalOrderId, orderId);
+            }
+            else
             {
                 var errorMessage = "Неверный формат ID заказа";
                 _logger.LogWarning("Неверный формат external_order_id: {ExternalOrderId}. Сообщение об ошибке: {ErrorMessage}", 
@@ -400,9 +429,30 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 };
             }
 
-            // Получаем заказ из БД
+            // Получаем заказ из БД (или создаем новый)
             var order = await _orderRepository.GetByIdAsync(orderId);
-            if (order == null)
+            
+            if (order == null && isNewOrder)
+            {
+                // Заказ создан в FimBiz, нужно создать его в локальной БД
+                // Проверяем флаг IsCreateCabinet контрагента
+                var createResult = await CreateOrderFromFimBizAsync(request.Order, orderId, request.Order.ExternalOrderId);
+                if (!createResult.Success)
+                {
+                    _logger.LogWarning("Не удалось создать заказ из FimBiz: {Message}", createResult.Message);
+                    return new NotifyOrderUpdateResponse
+                    {
+                        Success = false,
+                        Message = createResult.Message
+                    };
+                }
+                
+                order = createResult.Order!;
+                _logger.LogInformation("Заказ {OrderId} успешно создан из FimBiz для контрагента с личным кабинетом", orderId);
+                
+                // После создания заказа продолжаем обработку как обновление
+            }
+            else if (order == null)
             {
                 var errorMessage = "Заказ не найден";
                 _logger.LogWarning("Заказ {OrderId} не найден в локальной БД. ExternalOrderId: {ExternalOrderId}. Сообщение об ошибке: {ErrorMessage}", 
@@ -595,6 +645,204 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             _logger.LogError(ex, "Ошибка при обработке уведомления об обновлении заказа {ExternalOrderId}", 
                 request.Order?.ExternalOrderId);
             throw new RpcException(new Status(StatusCode.Internal, "Internal server error"));
+        }
+    }
+
+    /// <summary>
+    /// Создание заказа из FimBiz с проверкой флага IsCreateCabinet
+    /// </summary>
+    private async Task<(bool Success, LocalOrder? Order, string Message)> CreateOrderFromFimBizAsync(
+        GrpcOrder grpcOrder,
+        Guid orderId,
+        string externalOrderId)
+    {
+        try
+        {
+            // Получаем контрагента по contractor_id из FimBiz
+            var contractor = await _fimBizGrpcClient.GetCounterpartyByFimBizIdAsync(grpcOrder.ContractorId);
+            if (contractor == null)
+            {
+                return (false, null, $"Контрагент с FimBiz ID {grpcOrder.ContractorId} не найден");
+            }
+
+            // ВАЖНО: Проверяем флаг IsCreateCabinet
+            if (!contractor.IsCreateCabinet)
+            {
+                _logger.LogWarning("Попытка создать заказ для контрагента {ContractorId} без личного кабинета (IsCreateCabinet = false). Заказ не будет создан.",
+                    grpcOrder.ContractorId);
+                return (false, null, "Для данного контрагента не разрешено создание заказов в интернет-магазине");
+            }
+
+            // Находим или создаем контрагента в локальной БД
+            var localCounterparty = await _counterpartyRepository.GetByFimBizIdAsync(grpcOrder.ContractorId);
+            if (localCounterparty == null)
+            {
+                // Создаем контрагента, если его нет (данные должны быть синхронизированы, но на всякий случай)
+                localCounterparty = new Counterparty
+                {
+                    Id = Guid.NewGuid(),
+                    FimBizContractorId = grpcOrder.ContractorId,
+                    Name = contractor.Name,
+                    PhoneNumber = contractor.PhoneNumber,
+                    Email = contractor.Email,
+                    Type = contractor.Type,
+                    Inn = contractor.Inn,
+                    Kpp = contractor.Kpp,
+                    LegalAddress = contractor.LegalAddress,
+                    EdoIdentifier = contractor.EdoIdentifier,
+                    HasPostPayment = contractor.HasPostPayment,
+                    IsCreateCabinet = contractor.IsCreateCabinet,
+                    FimBizCompanyId = contractor.FimBizCompanyId,
+                    FimBizOrganizationId = contractor.FimBizOrganizationId,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                await _counterpartyRepository.CreateAsync(localCounterparty);
+                _logger.LogInformation("Создан новый контрагент {CounterpartyId} из FimBiz для заказа", localCounterparty.Id);
+            }
+
+            // Находим или создаем UserAccount для контрагента
+            var userAccount = await _dbContext.UserAccounts
+                .FirstOrDefaultAsync(u => u.CounterpartyId == localCounterparty.Id);
+
+            if (userAccount == null)
+            {
+                // Проверяем, есть ли у контрагента FimBizCompanyId для определения магазина
+                if (!localCounterparty.FimBizCompanyId.HasValue)
+                {
+                    return (false, null, "У контрагента не указан FimBizCompanyId. Невозможно определить магазин.");
+                }
+
+                var shop = await _shopRepository.GetByFimBizCompanyIdAsync(
+                    localCounterparty.FimBizCompanyId.Value,
+                    localCounterparty.FimBizOrganizationId);
+
+                if (shop == null || !shop.IsActive)
+                {
+                    return (false, null, 
+                        $"Интернет-магазин для компании {localCounterparty.FimBizCompanyId} не найден или неактивен.");
+                }
+
+                // Создаем UserAccount для контрагента с личным кабинетом
+                userAccount = new UserAccount
+                {
+                    Id = Guid.NewGuid(),
+                    CounterpartyId = localCounterparty.Id,
+                    ShopId = shop.Id,
+                    PhoneNumber = localCounterparty.PhoneNumber ?? string.Empty,
+                    IsFirstLogin = true,
+                    IsPasswordSet = false,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                await _userAccountRepository.CreateAsync(userAccount);
+                _logger.LogInformation("Создан новый UserAccount {UserAccountId} для контрагента {CounterpartyId} при создании заказа из FimBiz",
+                    userAccount.Id, localCounterparty.Id);
+            }
+
+            // Создаем заказ
+            var order = new LocalOrder
+            {
+                Id = orderId,
+                UserAccountId = userAccount.Id,
+                CounterpartyId = localCounterparty.Id,
+                OrderNumber = grpcOrder.OrderNumber,
+                Status = MapGrpcStatusToLocal(grpcOrder.Status),
+                DeliveryType = MapGrpcDeliveryTypeToLocal(grpcOrder.DeliveryType),
+                TotalAmount = (decimal)grpcOrder.TotalPrice / 100, // Из копеек в рубли
+                FimBizOrderId = grpcOrder.OrderId,
+                Carrier = string.IsNullOrEmpty(grpcOrder.Carrier) ? null : grpcOrder.Carrier,
+                TrackingNumber = string.IsNullOrEmpty(grpcOrder.TrackingNumber) ? null : grpcOrder.TrackingNumber,
+                IsPriority = grpcOrder.IsPriority,
+                IsLongAssembling = grpcOrder.IsLongAssembling,
+                CreatedAt = grpcOrder.CreatedAt > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(grpcOrder.CreatedAt).UtcDateTime
+                    : DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                SyncedWithFimBizAt = DateTime.UtcNow
+            };
+
+            // Устанавливаем даты событий, если они переданы
+            if (grpcOrder.HasAssembledAt && grpcOrder.AssembledAt > 0)
+            {
+                order.AssembledAt = DateTimeOffset.FromUnixTimeSeconds(grpcOrder.AssembledAt).UtcDateTime;
+            }
+            if (grpcOrder.HasShippedAt && grpcOrder.ShippedAt > 0)
+            {
+                order.ShippedAt = DateTimeOffset.FromUnixTimeSeconds(grpcOrder.ShippedAt).UtcDateTime;
+            }
+            if (grpcOrder.HasDeliveredAt && grpcOrder.DeliveredAt > 0)
+            {
+                order.DeliveredAt = DateTimeOffset.FromUnixTimeSeconds(grpcOrder.DeliveredAt).UtcDateTime;
+            }
+
+            // Добавляем начальную запись в историю статусов
+            var initialStatusHistory = new OrderStatusHistory
+            {
+                Id = Guid.NewGuid(),
+                OrderId = order.Id,
+                Status = order.Status,
+                ChangedAt = grpcOrder.StatusChangedAt > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(grpcOrder.StatusChangedAt).UtcDateTime
+                    : order.CreatedAt
+            };
+            order.StatusHistory.Add(initialStatusHistory);
+
+            // Добавляем позиции заказа
+            if (grpcOrder.Items != null && grpcOrder.Items.Count > 0)
+            {
+                foreach (var grpcItem in grpcOrder.Items)
+                {
+                    var orderItem = new LocalOrderItem
+                    {
+                        Id = Guid.NewGuid(),
+                        OrderId = order.Id,
+                        NomenclatureId = grpcItem.HasNomenclatureId && grpcItem.NomenclatureId > 0
+                            ? ConvertInt32ToGuid(grpcItem.NomenclatureId)
+                            : Guid.Empty,
+                        NomenclatureName = grpcItem.Name,
+                        Quantity = grpcItem.Quantity,
+                        Price = (decimal)grpcItem.Price / 100, // Из копеек в рубли
+                        DiscountPercent = 0,
+                        TotalAmount = (decimal)grpcItem.Price / 100 * grpcItem.Quantity,
+                        UrlPhotosJson = SerializeUrlPhotos(grpcItem.PhotoUrls.ToList()),
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    order.Items.Add(orderItem);
+                }
+            }
+
+            // Создаем заказ в БД
+            await _orderRepository.CreateAsync(order);
+
+            // Обрабатываем bill_info (счет), если есть
+            if (grpcOrder.BillInfo != null)
+            {
+                await ProcessBillInfoAsync(order, grpcOrder.BillInfo);
+            }
+
+            // Обрабатываем upd_info (УПД), если есть
+            if (grpcOrder.UpdInfo != null)
+            {
+                await ProcessUpdInfoAsync(order, grpcOrder.UpdInfo);
+            }
+
+            // Обрабатываем прикрепленные файлы
+            if (grpcOrder.AttachedFiles != null && grpcOrder.AttachedFiles.Count > 0)
+            {
+                await ProcessAttachedFilesAsync(order, grpcOrder.AttachedFiles);
+            }
+
+            _logger.LogInformation("Заказ {OrderId} успешно создан из FimBiz. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, ContractorId: {ContractorId}",
+                orderId, externalOrderId, grpcOrder.OrderId, grpcOrder.ContractorId);
+
+            return (true, order, "Заказ успешно создан");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при создании заказа из FimBiz. ExternalOrderId: {ExternalOrderId}, ContractorId: {ContractorId}",
+                externalOrderId, grpcOrder.ContractorId);
+            return (false, null, $"Ошибка при создании заказа: {ex.Message}");
         }
     }
 
