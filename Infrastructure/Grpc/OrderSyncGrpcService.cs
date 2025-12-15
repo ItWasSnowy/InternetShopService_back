@@ -120,8 +120,39 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             _logger.LogInformation("Получено уведомление об изменении статуса заказа {ExternalOrderId} на {NewStatus} от FimBiz", 
                 request.ExternalOrderId, request.NewStatus);
 
-            // Парсим external_order_id как Guid
-            if (!Guid.TryParse(request.ExternalOrderId, out var orderId))
+            // Парсим external_order_id - может быть Guid или FIMBIZ-{orderId}
+            LocalOrder? order = null;
+            Guid orderId;
+            
+            if (Guid.TryParse(request.ExternalOrderId, out var parsedGuid))
+            {
+                // Стандартный формат - Guid (заказ создан в интернет-магазине)
+                orderId = parsedGuid;
+                order = await _orderRepository.GetByIdAsync(orderId);
+            }
+            else if (request.ExternalOrderId.StartsWith("FIMBIZ-", StringComparison.OrdinalIgnoreCase))
+            {
+                // Формат FIMBIZ-{orderId} - заказ создан в FimBiz
+                // Ищем заказ по FimBizOrderId
+                order = await _orderRepository.GetByFimBizOrderIdAsync(request.FimBizOrderId);
+                
+                if (order == null)
+                {
+                    var errorMessage = "Заказ не найден";
+                    _logger.LogWarning("Заказ с FimBizOrderId {FimBizOrderId} не найден в локальной БД. ExternalOrderId: {ExternalOrderId}. Сообщение об ошибке: {ErrorMessage}", 
+                        request.FimBizOrderId, request.ExternalOrderId, errorMessage);
+                    return new NotifyOrderStatusChangeResponse
+                    {
+                        Success = false,
+                        Message = errorMessage
+                    };
+                }
+                
+                orderId = order.Id;
+                _logger.LogInformation("Найден существующий заказ из FimBiz для обновления статуса. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, LocalOrderId: {OrderId}",
+                    request.ExternalOrderId, request.FimBizOrderId, orderId);
+            }
+            else
             {
                 var errorMessage = "Неверный формат ID заказа";
                 _logger.LogWarning("Неверный формат external_order_id: {ExternalOrderId}. Сообщение об ошибке: {ErrorMessage}", 
@@ -133,8 +164,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 };
             }
 
-            // Получаем заказ из БД
-            var order = await _orderRepository.GetByIdAsync(orderId);
+            // Проверяем, что заказ найден
             if (order == null)
             {
                 var errorMessage = "Заказ не найден";
@@ -401,6 +431,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 request.Order.ExternalOrderId);
 
             // Парсим external_order_id - может быть Guid или FIMBIZ-{orderId}
+            LocalOrder? order = null;
             Guid orderId;
             bool isNewOrder = false;
             
@@ -408,14 +439,29 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             {
                 // Стандартный формат - Guid (заказ создан в интернет-магазине)
                 orderId = parsedGuid;
+                order = await _orderRepository.GetByIdAsync(orderId);
             }
             else if (request.Order.ExternalOrderId.StartsWith("FIMBIZ-", StringComparison.OrdinalIgnoreCase))
             {
-                // Формат FIMBIZ-{orderId} - заказ создан в FimBiz, генерируем новый Guid
-                orderId = Guid.NewGuid();
-                isNewOrder = true;
-                _logger.LogInformation("Обнаружен заказ, созданный в FimBiz. ExternalOrderId: {ExternalOrderId}, Создан новый локальный OrderId: {OrderId}",
-                    request.Order.ExternalOrderId, orderId);
+                // Формат FIMBIZ-{orderId} - заказ создан в FimBiz
+                // Ищем заказ по FimBizOrderId (это request.Order.OrderId)
+                order = await _orderRepository.GetByFimBizOrderIdAsync(request.Order.OrderId);
+                
+                if (order == null)
+                {
+                    // Заказ не найден - это первое уведомление, создаем новый
+                    orderId = Guid.NewGuid();
+                    isNewOrder = true;
+                    _logger.LogInformation("Обнаружен новый заказ, созданный в FimBiz. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, Создан новый локальный OrderId: {OrderId}",
+                        request.Order.ExternalOrderId, request.Order.OrderId, orderId);
+                }
+                else
+                {
+                    // Заказ найден - используем его для обновления
+                    orderId = order.Id;
+                    _logger.LogInformation("Найден существующий заказ из FimBiz для обновления. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, LocalOrderId: {OrderId}",
+                        request.Order.ExternalOrderId, request.Order.OrderId, orderId);
+                }
             }
             else
             {
@@ -429,9 +475,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 };
             }
 
-            // Получаем заказ из БД (или создаем новый)
-            var order = await _orderRepository.GetByIdAsync(orderId);
-            
+            // Если заказ не найден и это новый заказ из FimBiz - создаем его
             if (order == null && isNewOrder)
             {
                 // Заказ создан в FimBiz, нужно создать его в локальной БД
@@ -899,8 +943,39 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             _logger.LogInformation("Получено уведомление об удалении заказа {ExternalOrderId} от FimBiz", 
                 request.ExternalOrderId);
 
-            // Парсим external_order_id как Guid
-            if (!Guid.TryParse(request.ExternalOrderId, out var orderId))
+            // Парсим external_order_id - может быть Guid или FIMBIZ-{orderId}
+            LocalOrder? order = null;
+            Guid orderId;
+            
+            if (Guid.TryParse(request.ExternalOrderId, out var parsedGuid))
+            {
+                // Стандартный формат - Guid (заказ создан в интернет-магазине)
+                orderId = parsedGuid;
+                order = await _orderRepository.GetByIdAsync(orderId);
+            }
+            else if (request.ExternalOrderId.StartsWith("FIMBIZ-", StringComparison.OrdinalIgnoreCase))
+            {
+                // Формат FIMBIZ-{orderId} - заказ создан в FimBiz
+                // Ищем заказ по FimBizOrderId
+                order = await _orderRepository.GetByFimBizOrderIdAsync(request.FimBizOrderId);
+                
+                if (order == null)
+                {
+                    var errorMessage = "Заказ не найден";
+                    _logger.LogWarning("Заказ с FimBizOrderId {FimBizOrderId} не найден в локальной БД. ExternalOrderId: {ExternalOrderId}. Сообщение об ошибке: {ErrorMessage}", 
+                        request.FimBizOrderId, request.ExternalOrderId, errorMessage);
+                    return new NotifyOrderDeleteResponse
+                    {
+                        Success = false,
+                        Message = errorMessage
+                    };
+                }
+                
+                orderId = order.Id;
+                _logger.LogInformation("Найден существующий заказ из FimBiz для удаления. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, LocalOrderId: {OrderId}",
+                    request.ExternalOrderId, request.FimBizOrderId, orderId);
+            }
+            else
             {
                 var errorMessage = "Неверный формат ID заказа";
                 _logger.LogWarning("Неверный формат external_order_id: {ExternalOrderId}. Сообщение об ошибке: {ErrorMessage}", 
@@ -912,8 +987,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 };
             }
 
-            // Получаем заказ из БД
-            var order = await _orderRepository.GetByIdAsync(orderId);
+            // Проверяем, что заказ найден
             if (order == null)
             {
                 var errorMessage = "Заказ не найден";

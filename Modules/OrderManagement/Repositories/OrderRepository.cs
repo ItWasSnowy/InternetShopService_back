@@ -24,6 +24,17 @@ public class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(o => o.Id == id);
     }
 
+    public async Task<Order?> GetByFimBizOrderIdAsync(int fimBizOrderId)
+    {
+        return await _context.Orders
+            .Include(o => o.Items)
+            .Include(o => o.DeliveryAddress)
+            .Include(o => o.CargoReceiver)
+            .Include(o => o.Attachments)
+            .Include(o => o.StatusHistory)
+            .FirstOrDefaultAsync(o => o.FimBizOrderId == fimBizOrderId);
+    }
+
     public async Task<List<Order>> GetByUserIdAsync(Guid userId)
     {
         return await _context.Orders

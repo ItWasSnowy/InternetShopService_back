@@ -5,6 +5,7 @@ namespace InternetShopService_back.Modules.OrderManagement.Repositories;
 public interface IOrderRepository
 {
     Task<Order?> GetByIdAsync(Guid id);
+    Task<Order?> GetByFimBizOrderIdAsync(int fimBizOrderId);
     Task<List<Order>> GetByUserIdAsync(Guid userId);
     Task<(List<Order> Orders, int TotalCount)> GetByUserIdPagedAsync(Guid userId, int page, int pageSize);
     Task<Order> CreateAsync(Order order);
