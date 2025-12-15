@@ -334,6 +334,15 @@ message NotifyOrderStatusChangeRequest {
 
   optional int64 delivered_at = 17;      // Unix timestamp доставки
 
+  // Новые поля для создания заказа (используются только для заказов, созданных в FimBiz)
+  optional int32 contractor_id = 18;       // ID контрагента (обязательно для создания заказа)
+  optional string order_number = 19;     // Номер заказа
+  optional DeliveryType delivery_type = 20; // Тип доставки
+  optional int64 total_price = 21;       // Общая стоимость в копейках
+  optional int64 created_at = 22;        // Дата создания (Unix timestamp)
+  optional string delivery_address = 23;  // Адрес доставки
+  repeated OrderItem items = 24;         // Позиции заказа
+
 }
 
 // Ответ на уведомление об изменении статуса

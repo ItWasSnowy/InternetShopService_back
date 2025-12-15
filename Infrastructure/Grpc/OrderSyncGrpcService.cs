@@ -138,34 +138,71 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 
                 if (order == null)
                 {
-                    // Заказ не найден - попытка создать его, получив полные данные
+                    // Заказ не найден - попытка создать его из данных запроса или получить через GetOrderAsync
                     try
                     {
-                        var companyId = _configuration.GetValue<int>("FimBiz:CompanyId", 0);
-                        if (companyId > 0)
+                        // Проверяем, есть ли в запросе необходимые данные для создания заказа
+                        if (request.HasContractorId && request.ContractorId > 0)
                         {
-                            var getOrderRequest = new GetOrderRequest
+                            // Есть contractor_id - создаем заказ напрямую из данных запроса
+                            _logger.LogInformation("Попытка создать заказ {ExternalOrderId} (FimBizOrderId: {FimBizOrderId}) из NotifyOrderStatusChangeRequest",
+                                request.ExternalOrderId, request.FimBizOrderId);
+                            
+                            orderId = Guid.NewGuid();
+                            var createResult = await CreateOrderFromStatusChangeRequestAsync(request, orderId);
+                            if (createResult.Success)
                             {
-                                ExternalOrderId = request.ExternalOrderId,
-                                CompanyId = companyId
-                            };
-                            var fullOrder = await _fimBizGrpcClient.GetOrderAsync(getOrderRequest);
-                            if (fullOrder != null)
+                                order = createResult.Order!;
+                                _logger.LogInformation("Заказ {OrderId} успешно создан из NotifyOrderStatusChangeRequest", orderId);
+                            }
+                            else
                             {
-                                // Создаем заказ из полных данных
-                                orderId = Guid.NewGuid();
-                                var createResult = await CreateOrderFromFimBizAsync(fullOrder, orderId, request.ExternalOrderId);
-                                if (createResult.Success)
+                                _logger.LogWarning("Не удалось создать заказ {ExternalOrderId} из NotifyOrderStatusChangeRequest: {Message}",
+                                    request.ExternalOrderId, createResult.Message);
+                            }
+                        }
+                        else
+                        {
+                            // Нет contractor_id - пытаемся получить заказ через GetOrderAsync (старый способ)
+                            var companyId = _configuration.GetValue<int>("FimBiz:CompanyId", 0);
+                            if (companyId > 0)
+                            {
+                                _logger.LogInformation("ContractorId не указан в запросе. Попытка получить заказ {ExternalOrderId} через GetOrderAsync",
+                                    request.ExternalOrderId);
+                                
+                                var getOrderRequest = new GetOrderRequest
                                 {
-                                    order = createResult.Order!;
-                                    _logger.LogInformation("Заказ {OrderId} успешно создан из FimBiz в NotifyOrderStatusChange", orderId);
+                                    ExternalOrderId = request.ExternalOrderId,
+                                    CompanyId = companyId
+                                };
+                                var fullOrder = await _fimBizGrpcClient.GetOrderAsync(getOrderRequest);
+                                if (fullOrder != null)
+                                {
+                                    // Создаем заказ из полных данных
+                                    orderId = Guid.NewGuid();
+                                    var createResult = await CreateOrderFromFimBizAsync(fullOrder, orderId, request.ExternalOrderId);
+                                    if (createResult.Success)
+                                    {
+                                        order = createResult.Order!;
+                                        _logger.LogInformation("Заказ {OrderId} успешно создан из FimBiz через GetOrderAsync в NotifyOrderStatusChange", orderId);
+                                    }
                                 }
+                                else
+                                {
+                                    _logger.LogWarning("Не удалось получить заказ {ExternalOrderId} через GetOrderAsync. Заказ будет создан при следующем уведомлении NotifyOrderUpdate",
+                                        request.ExternalOrderId);
+                                }
+                            }
+                            else
+                            {
+                                _logger.LogWarning("FimBiz:CompanyId не настроен и ContractorId не указан в запросе. Невозможно создать заказ {ExternalOrderId}",
+                                    request.ExternalOrderId);
                             }
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Ошибка при попытке создать заказ {ExternalOrderId} в NotifyOrderStatusChange", 
+                        _logger.LogError(ex, "Ошибка при попытке создать заказ {ExternalOrderId} в NotifyOrderStatusChange",
                             request.ExternalOrderId);
                     }
                 }
@@ -911,6 +948,224 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         {
             _logger.LogError(ex, "Ошибка при создании заказа из FimBiz. ExternalOrderId: {ExternalOrderId}, ContractorId: {ContractorId}",
                 externalOrderId, grpcOrder.ContractorId);
+            return (false, null, $"Ошибка при создании заказа: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Создание заказа из NotifyOrderStatusChangeRequest (для заказов, созданных в FimBiz)
+    /// </summary>
+    private async Task<(bool Success, LocalOrder? Order, string Message)> CreateOrderFromStatusChangeRequestAsync(
+        NotifyOrderStatusChangeRequest request,
+        Guid orderId)
+    {
+        try
+        {
+            // Проверяем наличие обязательных полей
+            if (!request.HasContractorId || request.ContractorId <= 0)
+            {
+                return (false, null, "ContractorId не указан в запросе");
+            }
+
+            // Получаем контрагента по contractor_id из FimBiz
+            var contractor = await _fimBizGrpcClient.GetCounterpartyByFimBizIdAsync(request.ContractorId);
+            if (contractor == null)
+            {
+                return (false, null, $"Контрагент с FimBiz ID {request.ContractorId} не найден");
+            }
+
+            // ВАЖНО: Проверяем флаг IsCreateCabinet
+            if (!contractor.IsCreateCabinet)
+            {
+                _logger.LogWarning("Попытка создать заказ для контрагента {ContractorId} без личного кабинета (IsCreateCabinet = false). Заказ не будет создан.",
+                    request.ContractorId);
+                return (false, null, "Для данного контрагента не разрешено создание заказов в интернет-магазине");
+            }
+
+            // Находим или создаем контрагента в локальной БД
+            var localCounterparty = await _counterpartyRepository.GetByFimBizIdAsync(request.ContractorId);
+            if (localCounterparty == null)
+            {
+                // Создаем контрагента, если его нет
+                localCounterparty = new Counterparty
+                {
+                    Id = Guid.NewGuid(),
+                    FimBizContractorId = request.ContractorId,
+                    Name = contractor.Name,
+                    PhoneNumber = contractor.PhoneNumber,
+                    Email = contractor.Email,
+                    Type = contractor.Type,
+                    Inn = contractor.Inn,
+                    Kpp = contractor.Kpp,
+                    LegalAddress = contractor.LegalAddress,
+                    EdoIdentifier = contractor.EdoIdentifier,
+                    HasPostPayment = contractor.HasPostPayment,
+                    IsCreateCabinet = contractor.IsCreateCabinet,
+                    FimBizCompanyId = contractor.FimBizCompanyId,
+                    FimBizOrganizationId = contractor.FimBizOrganizationId,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                await _counterpartyRepository.CreateAsync(localCounterparty);
+                _logger.LogInformation("Создан новый контрагент {CounterpartyId} из FimBiz для заказа", localCounterparty.Id);
+            }
+
+            // Находим или создаем UserAccount для контрагента
+            var userAccount = await _dbContext.UserAccounts
+                .FirstOrDefaultAsync(u => u.CounterpartyId == localCounterparty.Id);
+
+            if (userAccount == null)
+            {
+                // Проверяем, есть ли у контрагента FimBizCompanyId для определения магазина
+                if (!localCounterparty.FimBizCompanyId.HasValue)
+                {
+                    return (false, null, "У контрагента не указан FimBizCompanyId. Невозможно определить магазин.");
+                }
+
+                var shop = await _shopRepository.GetByFimBizCompanyIdAsync(
+                    localCounterparty.FimBizCompanyId.Value,
+                    localCounterparty.FimBizOrganizationId);
+
+                if (shop == null || !shop.IsActive)
+                {
+                    return (false, null, 
+                        $"Интернет-магазин для компании {localCounterparty.FimBizCompanyId} не найден или неактивен.");
+                }
+
+                // Создаем UserAccount для контрагента с личным кабинетом
+                userAccount = new UserAccount
+                {
+                    Id = Guid.NewGuid(),
+                    CounterpartyId = localCounterparty.Id,
+                    ShopId = shop.Id,
+                    PhoneNumber = localCounterparty.PhoneNumber ?? string.Empty,
+                    IsFirstLogin = true,
+                    IsPasswordSet = false,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                await _userAccountRepository.CreateAsync(userAccount);
+                _logger.LogInformation("Создан новый UserAccount {UserAccountId} для контрагента {CounterpartyId} при создании заказа из NotifyOrderStatusChange",
+                    userAccount.Id, localCounterparty.Id);
+            }
+
+            // Определяем стоимость заказа
+            decimal totalAmount = 0;
+            if (request.HasTotalPrice && request.TotalPrice > 0)
+            {
+                totalAmount = (decimal)request.TotalPrice / 100; // Из копеек в рубли
+            }
+            else if (request.HasModifiedPrice && request.ModifiedPrice > 0)
+            {
+                totalAmount = (decimal)request.ModifiedPrice / 100;
+            }
+
+            // Определяем тип доставки
+            var deliveryType = request.HasDeliveryType 
+                ? MapGrpcDeliveryTypeToLocal(request.DeliveryType)
+                : LocalDeliveryType.Pickup; // По умолчанию самовывоз
+
+            // Создаем заказ
+            var order = new LocalOrder
+            {
+                Id = orderId,
+                UserAccountId = userAccount.Id,
+                CounterpartyId = localCounterparty.Id,
+                OrderNumber = request.HasOrderNumber && !string.IsNullOrEmpty(request.OrderNumber) 
+                    ? request.OrderNumber 
+                    : request.FimBizOrderId.ToString(),
+                Status = MapGrpcStatusToLocal(request.NewStatus),
+                DeliveryType = deliveryType,
+                TotalAmount = totalAmount,
+                FimBizOrderId = request.FimBizOrderId,
+                Carrier = request.HasCarrier && !string.IsNullOrEmpty(request.Carrier) ? request.Carrier : null,
+                TrackingNumber = request.HasTrackingNumber && !string.IsNullOrEmpty(request.TrackingNumber) 
+                    ? request.TrackingNumber 
+                    : null,
+                IsPriority = request.IsPriority,
+                IsLongAssembling = request.IsLongAssembling,
+                CreatedAt = request.HasCreatedAt && request.CreatedAt > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(request.CreatedAt).UtcDateTime
+                    : DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                SyncedWithFimBizAt = DateTime.UtcNow
+            };
+
+            // Устанавливаем даты событий, если они переданы
+            if (request.HasAssembledAt && request.AssembledAt > 0)
+            {
+                order.AssembledAt = DateTimeOffset.FromUnixTimeSeconds(request.AssembledAt).UtcDateTime;
+            }
+            if (request.HasShippedAt && request.ShippedAt > 0)
+            {
+                order.ShippedAt = DateTimeOffset.FromUnixTimeSeconds(request.ShippedAt).UtcDateTime;
+            }
+            if (request.HasDeliveredAt && request.DeliveredAt > 0)
+            {
+                order.DeliveredAt = DateTimeOffset.FromUnixTimeSeconds(request.DeliveredAt).UtcDateTime;
+            }
+
+            // Добавляем начальную запись в историю статусов
+            var initialStatusHistory = new OrderStatusHistory
+            {
+                Id = Guid.NewGuid(),
+                OrderId = order.Id,
+                Status = order.Status,
+                Comment = request.HasComment && !string.IsNullOrEmpty(request.Comment) ? request.Comment : null,
+                ChangedAt = request.StatusChangedAt > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt).UtcDateTime
+                    : order.CreatedAt
+            };
+            order.StatusHistory.Add(initialStatusHistory);
+
+            // Добавляем позиции заказа, если они переданы
+            if (request.Items != null && request.Items.Count > 0)
+            {
+                foreach (var grpcItem in request.Items)
+                {
+                    var orderItem = new LocalOrderItem
+                    {
+                        Id = Guid.NewGuid(),
+                        OrderId = order.Id,
+                        NomenclatureId = grpcItem.HasNomenclatureId && grpcItem.NomenclatureId > 0
+                            ? ConvertInt32ToGuid(grpcItem.NomenclatureId)
+                            : Guid.Empty,
+                        NomenclatureName = grpcItem.Name,
+                        Quantity = grpcItem.Quantity,
+                        Price = (decimal)grpcItem.Price / 100, // Из копеек в рубли
+                        DiscountPercent = 0,
+                        TotalAmount = (decimal)grpcItem.Price / 100 * grpcItem.Quantity,
+                        UrlPhotosJson = SerializeUrlPhotos(grpcItem.PhotoUrls.ToList()),
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    order.Items.Add(orderItem);
+                }
+            }
+
+            // Создаем заказ в БД
+            await _orderRepository.CreateAsync(order);
+
+            // Обрабатываем bill_info (счет), если есть
+            if (request.BillInfo != null)
+            {
+                await ProcessBillInfoAsync(order, request.BillInfo);
+            }
+
+            // Обрабатываем upd_info (УПД), если есть
+            if (request.UpdInfo != null)
+            {
+                await ProcessUpdInfoAsync(order, request.UpdInfo);
+            }
+
+            _logger.LogInformation("Заказ {OrderId} успешно создан из NotifyOrderStatusChangeRequest. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, ContractorId: {ContractorId}",
+                orderId, request.ExternalOrderId, request.FimBizOrderId, request.ContractorId);
+
+            return (true, order, "Заказ успешно создан");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при создании заказа из NotifyOrderStatusChangeRequest. ExternalOrderId: {ExternalOrderId}, ContractorId: {ContractorId}",
+                request.ExternalOrderId, request.HasContractorId ? request.ContractorId.ToString() : "не указан");
             return (false, null, $"Ошибка при создании заказа: {ex.Message}");
         }
     }
