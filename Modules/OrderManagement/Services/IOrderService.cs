@@ -22,5 +22,10 @@ public interface IOrderService
     /// Подтверждает счет по коду из звонка (для постоплаты)
     /// </summary>
     Task<OrderDto> ConfirmInvoiceByPhoneAsync(Guid orderId, Guid userId, string code);
+    
+    /// <summary>
+    /// Загружает файл к заказу
+    /// </summary>
+    Task<OrderAttachmentDto> UploadAttachmentAsync(Guid orderId, Guid userId, Microsoft.AspNetCore.Http.IFormFile file);
 }
 

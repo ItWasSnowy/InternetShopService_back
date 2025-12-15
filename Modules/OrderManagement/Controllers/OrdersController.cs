@@ -158,5 +158,42 @@ public class OrdersController : ControllerBase
             return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
         }
     }
+
+    /// <summary>
+    /// Загрузить файл к заказу
+    /// </summary>
+    [HttpPost("{id}/attachments")]
+    [RequestSizeLimit(50 * 1024 * 1024)] // Максимальный размер файла: 50 МБ
+    public async Task<IActionResult> UploadAttachment(Guid id, IFormFile file)
+    {
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        if (file == null || file.Length == 0)
+        {
+            return BadRequest(new { error = "Файл не указан или пуст" });
+        }
+
+        try
+        {
+            var attachment = await _orderService.UploadAttachmentAsync(id, userId.Value, file);
+            return Ok(attachment);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
+    }
 }
 

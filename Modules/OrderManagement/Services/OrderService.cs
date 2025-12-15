@@ -11,6 +11,7 @@ using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Shared.Repositories;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -977,5 +978,115 @@ public class OrderService : IOrderService
         await SendOrderStatusNotificationAsync(order);
 
         return await MapToOrderDtoAsync(order);
+    }
+
+    /// <summary>
+    /// Загружает файл к заказу
+    /// </summary>
+    public async Task<OrderAttachmentDto> UploadAttachmentAsync(Guid orderId, Guid userId, IFormFile file)
+    {
+        // Проверяем, что файл передан
+        if (file == null || file.Length == 0)
+        {
+            throw new InvalidOperationException("Файл не указан или пуст");
+        }
+
+        // Проверяем размер файла (максимум 50 МБ)
+        const long maxFileSize = 50 * 1024 * 1024; // 50 МБ
+        if (file.Length > maxFileSize)
+        {
+            throw new InvalidOperationException($"Размер файла превышает максимально допустимый ({maxFileSize / 1024 / 1024} МБ)");
+        }
+
+        // Получаем заказ
+        var order = await _orderRepository.GetByIdAsync(orderId);
+        if (order == null)
+        {
+            throw new InvalidOperationException("Заказ не найден");
+        }
+
+        // Проверяем, что заказ принадлежит пользователю
+        if (order.UserAccountId != userId)
+        {
+            throw new UnauthorizedAccessException("Заказ не принадлежит текущему пользователю");
+        }
+
+        // Сохраняем файл локально
+        var localPath = await SaveFileLocallyAsync(orderId, file.FileName, file);
+        if (string.IsNullOrEmpty(localPath))
+        {
+            throw new InvalidOperationException("Не удалось сохранить файл");
+        }
+
+        // Создаем запись в БД
+        var attachment = new OrderAttachment
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            FileName = file.FileName,
+            FilePath = localPath,
+            ContentType = file.ContentType,
+            FileSize = file.Length,
+            IsVisibleToCustomer = true, // По умолчанию файлы, загруженные пользователем, видимы ему
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _context.OrderAttachments.AddAsync(attachment);
+        await _context.SaveChangesAsync();
+
+        _logger.LogInformation("Файл {FileName} успешно загружен для заказа {OrderId} пользователем {UserId}", 
+            file.FileName, orderId, userId);
+
+        return new OrderAttachmentDto
+        {
+            Id = attachment.Id,
+            FileName = attachment.FileName,
+            ContentType = attachment.ContentType,
+            IsVisibleToCustomer = attachment.IsVisibleToCustomer,
+            CreatedAt = attachment.CreatedAt
+        };
+    }
+
+    /// <summary>
+    /// Сохранение файла локально (из IFormFile)
+    /// </summary>
+    private async Task<string?> SaveFileLocallyAsync(Guid orderId, string fileName, IFormFile file)
+    {
+        try
+        {
+            // Получаем путь для сохранения файлов из конфигурации
+            var uploadsPath = _configuration["AppSettings:UploadsPath"] 
+                ?? _configuration["AppSettings:FilesPath"]
+                ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "orders");
+
+            // Создаем директорию для заказа, если её нет
+            var orderDirectory = Path.Combine(uploadsPath, orderId.ToString());
+            Directory.CreateDirectory(orderDirectory);
+
+            // Генерируем уникальное имя файла (добавляем timestamp для избежания конфликтов)
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+            var safeFileName = Path.GetFileNameWithoutExtension(fileName);
+            var extension = Path.GetExtension(fileName);
+            var uniqueFileName = $"{safeFileName}_{timestamp}{extension}";
+
+            var filePath = Path.Combine(orderDirectory, uniqueFileName);
+
+            // Сохраняем файл
+            using (var stream = new FileStream(filePath, FileMode.Create))
+            {
+                await file.CopyToAsync(stream);
+            }
+
+            // Возвращаем относительный путь для хранения в БД
+            var relativePath = Path.Combine("uploads", "orders", orderId.ToString(), uniqueFileName)
+                .Replace('\\', '/');
+
+            return relativePath;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при сохранении файла {FileName} локально", fileName);
+            return null;
+        }
     }
 }
