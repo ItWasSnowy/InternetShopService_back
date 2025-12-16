@@ -32,6 +32,8 @@ public class ApplicationDbContext : DbContext
     public DbSet<UpdDocument> UpdDocuments { get; set; }
     public DbSet<OrderStatusHistory> OrderStatusHistories { get; set; }
     public DbSet<OrderAttachment> OrderAttachments { get; set; }
+    public DbSet<OrderComment> OrderComments { get; set; }
+    public DbSet<OrderCommentAttachment> OrderCommentAttachments { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

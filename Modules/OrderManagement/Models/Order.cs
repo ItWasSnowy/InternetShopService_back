@@ -40,5 +40,6 @@ public class Order
     public virtual ICollection<OrderItem> Items { get; set; } = new List<OrderItem>();
     public virtual ICollection<OrderStatusHistory> StatusHistory { get; set; } = new List<OrderStatusHistory>();
     public virtual ICollection<OrderAttachment> Attachments { get; set; } = new List<OrderAttachment>();
+    public virtual ICollection<OrderComment> Comments { get; set; } = new List<OrderComment>();
 }
 

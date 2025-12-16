@@ -3,6 +3,7 @@ using System;
 using InternetShopService_back.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace InternetShopService_back.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251216092250_AddOrderComments")]
+    partial class AddOrderComments
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -246,9 +249,6 @@ namespace InternetShopService_back.Migrations
                     b.Property<int?>("AuthorProfileId")
                         .HasColumnType("integer");
 
-                    b.Property<Guid?>("AuthorUserId")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("CommentText")
                         .IsRequired()
                         .HasMaxLength(5000)
@@ -272,8 +272,6 @@ namespace InternetShopService_back.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("AuthorUserId");
 
                     b.HasIndex("CreatedAt");
 

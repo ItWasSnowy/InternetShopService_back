@@ -14,6 +14,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     private readonly GrpcChannel _channel;
     private readonly ContractorSyncService.ContractorSyncServiceClient _contractorClient;
     private readonly OrderSyncService.OrderSyncServiceClient _orderClient;
+    private readonly OrderCommentSyncService.OrderCommentSyncServiceClient _orderCommentClient;
     private readonly IConfiguration _configuration;
     private readonly ILogger<FimBizGrpcClient> _logger;
     private readonly string _apiKey;
@@ -41,6 +42,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
 
         _contractorClient = new ContractorSyncService.ContractorSyncServiceClient(_channel);
         _orderClient = new OrderSyncService.OrderSyncServiceClient(_channel);
+        _orderCommentClient = new OrderCommentSyncService.OrderCommentSyncServiceClient(_channel);
     }
 
     public async Task<Counterparty?> GetCounterpartyAsync(string phoneNumber)
@@ -300,6 +302,56 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
             if (ex.StatusCode == StatusCode.NotFound)
             {
                 return null!;
+            }
+            throw;
+        }
+    }
+
+    public async Task<CreateCommentResponse> CreateCommentAsync(CreateCommentRequest request)
+    {
+        try
+        {
+            var headers = CreateHeaders();
+            var response = await _orderCommentClient.CreateCommentAsync(request, headers);
+            
+            if (!response.Success)
+            {
+                _logger.LogWarning("FimBiz вернул неуспешный ответ при создании комментария {CommentId}: {Message}", 
+                    request.Comment.CommentId, response.Message);
+            }
+            
+            return response;
+        }
+        catch (RpcException ex)
+        {
+            _logger.LogError(ex, "Ошибка gRPC при создании комментария {CommentId}. StatusCode: {StatusCode}, Detail: {Detail}", 
+                request.Comment.CommentId, ex.StatusCode, ex.Status.Detail);
+            if (ex.StatusCode == StatusCode.Unauthenticated)
+            {
+                throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");
+            }
+            throw;
+        }
+    }
+
+    public async Task<GetOrderCommentsResponse> GetOrderCommentsAsync(GetOrderCommentsRequest request)
+    {
+        try
+        {
+            var headers = CreateHeaders();
+            return await _orderCommentClient.GetOrderCommentsAsync(request, headers);
+        }
+        catch (RpcException ex)
+        {
+            _logger.LogError(ex, "Ошибка gRPC при получении комментариев для заказа {ExternalOrderId}", request.ExternalOrderId);
+            if (ex.StatusCode == StatusCode.Unauthenticated)
+            {
+                throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");
+            }
+            if (ex.StatusCode == StatusCode.NotFound)
+            {
+                // Возвращаем пустой список комментариев
+                return new GetOrderCommentsResponse();
             }
             throw;
         }

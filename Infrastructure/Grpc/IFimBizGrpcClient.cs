@@ -24,5 +24,9 @@ public interface IFimBizGrpcClient
     Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequest request);
     Task<UpdateOrderStatusResponse> UpdateOrderStatusAsync(UpdateOrderStatusRequest request);
     Task<Order> GetOrderAsync(GetOrderRequest request);
+    
+    // Методы для работы с комментариями к заказам
+    Task<CreateCommentResponse> CreateCommentAsync(CreateCommentRequest request);
+    Task<GetOrderCommentsResponse> GetOrderCommentsAsync(GetOrderCommentsRequest request);
 }
 

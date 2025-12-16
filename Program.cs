@@ -153,7 +153,8 @@ builder.Services.AddScoped<ICounterpartyRepository, CounterpartyRepository>();
 builder.Services.AddScoped<IShopRepository, ShopRepository>();
 builder.Services.AddScoped<IDeliveryAddressRepository, DeliveryAddressRepository>();
 builder.Services.AddScoped<ICargoReceiverRepository, CargoReceiverRepository>();
-builder.Services.AddScoped<IOrderRepository, OrderRepository>();
+    builder.Services.AddScoped<IOrderRepository, OrderRepository>();
+    builder.Services.AddScoped<IOrderCommentRepository, OrderCommentRepository>();
 
 // Infrastructure services
 builder.Services.AddHttpContextAccessor(); // Для доступа к HttpContext в сервисах
@@ -182,10 +183,11 @@ builder.Services.AddScoped<ICartService, CartService>();
 builder.Services.AddScoped<ICounterpartyService, CounterpartyService>();
 builder.Services.AddScoped<IDeliveryAddressService, DeliveryAddressService>();
 builder.Services.AddScoped<ICargoReceiverService, CargoReceiverService>();
-builder.Services.AddScoped<IOrderService, OrderService>();
-builder.Services.AddScoped<IOrderStatusService, OrderStatusService>();
-builder.Services.AddScoped<IInvoiceService, InvoiceService>();
-builder.Services.AddScoped<IPdfGenerationService, PdfGenerationService>();
+    builder.Services.AddScoped<IOrderService, OrderService>();
+    builder.Services.AddScoped<IOrderStatusService, OrderStatusService>();
+    builder.Services.AddScoped<IInvoiceService, InvoiceService>();
+    builder.Services.AddScoped<IPdfGenerationService, PdfGenerationService>();
+    builder.Services.AddScoped<IOrderCommentService, OrderCommentService>();
 
 // AutoMapper
 builder.Services.AddAutoMapper(typeof(Program));
@@ -281,6 +283,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
+app.UseStaticFiles(); // Для раздачи статических файлов (загруженные файлы)
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseUserContext();
@@ -288,6 +291,7 @@ app.UseUserContext();
 // Map gRPC service
 app.MapGrpcService<ContractorSyncGrpcService>();
 app.MapGrpcService<OrderSyncGrpcService>();
+app.MapGrpcService<OrderCommentSyncGrpcService>();
 
 app.MapControllers();
 
