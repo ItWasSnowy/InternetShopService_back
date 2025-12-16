@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.Extensions.FileProviders;
 using Npgsql;
 using Grpc.AspNetCore;
 using InternetShopService_back.Data;
@@ -283,7 +284,20 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
-app.UseStaticFiles(); // Для раздачи статических файлов (загруженные файлы)
+
+// Статические файлы ДО аутентификации - чтобы они были доступны без токена
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(
+        Path.Combine(app.Environment.ContentRootPath, "wwwroot")),
+    RequestPath = "", // Файлы доступны по корневому пути
+    OnPrepareResponse = ctx =>
+    {
+        // Устанавливаем заголовки для кеширования
+        ctx.Context.Response.Headers.Append("Cache-Control", "public,max-age=3600");
+    }
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseUserContext();
