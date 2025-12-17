@@ -31,6 +31,7 @@ public class CounterpartyRepository : ICounterpartyRepository
     {
         return await _context.Counterparties
             .Include(c => c.Discounts)
+            .Include(c => c.UserAccount)
             .FirstOrDefaultAsync(c => c.FimBizContractorId == fimBizContractorId);
     }
 

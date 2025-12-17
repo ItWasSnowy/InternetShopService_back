@@ -23,6 +23,9 @@ service ContractorSyncService {
   
   // Выполнить команду управления сессиями с получением результата
   rpc ExecuteSessionControl (ExecuteSessionControlRequest) returns (ExecuteSessionControlResponse);
+  
+  // Получить адреса доставки контрагента из интернет-магазина
+  rpc GetContractorDeliveryAddresses (GetContractorDeliveryAddressesRequest) returns (GetContractorDeliveryAddressesResponse);
 }
 
 // Запрос списка контрагентов
@@ -221,5 +224,23 @@ message ExecuteSessionControlResponse {
   int32 disconnected_count = 3;         // Количество отключенных сессий
   repeated string disconnected_session_ids = 4;  // ID отключенных сессий
   repeated string error_session_ids = 5;  // ID сессий, которые не удалось отключить
+}
+
+// Запрос адресов доставки контрагента
+message GetContractorDeliveryAddressesRequest {
+  int32 contractor_id = 1;  // ID контрагента в ФимБиз
+}
+
+// Ответ со списком адресов доставки
+message GetContractorDeliveryAddressesResponse {
+  repeated DeliveryAddressInfo addresses = 1;
+}
+
+// Адрес доставки контрагента
+message DeliveryAddressInfo {
+  string id = 1;            // Локальный ID адреса в интернет-магазине (GUID)
+  string address = 2;       // Полный адрес доставки
+  bool is_default = 3;      // Адрес по умолчанию
+  int64 date_create = 4;    // Unix timestamp (секунды с 1970-01-01 UTC)
 }
 
