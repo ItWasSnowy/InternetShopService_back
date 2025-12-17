@@ -225,13 +225,12 @@ public class OrderCommentService : IOrderCommentService
             throw new InvalidOperationException("Не удалось сохранить файл");
         }
 
-        // Формируем полный URL файла через API контроллер (с SSL)
+        // Формируем полный URL файла
         var baseUrl = _configuration["AppSettings:BaseUrl"] 
             ?? _configuration["AppSettings:PublicUrl"]
             ?? throw new InvalidOperationException("AppSettings:BaseUrl или AppSettings:PublicUrl должен быть настроен для загрузки файлов");
         
-        // Формируем URL через API контроллер - так будет работать SSL
-        var fullUrl = GetPublicFileUrl(baseUrl, relativePath, orderId);
+        var fullUrl = GetPublicFileUrl(baseUrl, relativePath);
 
         _logger.LogInformation("Файл {FileName} успешно загружен для комментария к заказу {OrderId} пользователем {UserId}", 
             file.FileName, orderId, userId);
@@ -290,17 +289,19 @@ public class OrderCommentService : IOrderCommentService
     }
 
     /// <summary>
-    /// Формирует полный публичный URL для файла через API контроллер
+    /// Формирует полный публичный URL для файла
     /// </summary>
-    private static string GetPublicFileUrl(string baseUrl, string relativePath, Guid orderId)
+    private static string GetPublicFileUrl(string baseUrl, string relativePath)
     {
         baseUrl = baseUrl.TrimEnd('/');
         
-        // Извлекаем имя файла из относительного пути
-        var fileName = Path.GetFileName(relativePath);
+        // Убеждаемся, что относительный путь начинается с /
+        if (!relativePath.StartsWith('/'))
+        {
+            relativePath = "/" + relativePath;
+        }
         
-        // Формируем URL через API контроллер - так будет работать SSL
-        return $"{baseUrl}/api/files/uploads/orders/{orderId}/comments/{fileName}";
+        return $"{baseUrl}{relativePath}";
     }
 
     private static OrderCommentDto MapToDto(LocalOrderComment comment)
