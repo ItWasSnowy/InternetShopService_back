@@ -540,6 +540,9 @@ public class FimBizSyncService : BackgroundService
                 NomenclatureGroupId = rule.NomenclatureGroupId > 0
                     ? Guid.Parse(rule.NomenclatureGroupId.ToString())
                     : null,
+                NomenclatureId = rule.HasNomenclatureId && rule.NomenclatureId > 0
+                    ? Guid.Parse(rule.NomenclatureId.ToString())
+                    : null,
                 DiscountPercent = (decimal)rule.DiscountPercent,
                 ValidFrom = validFrom,
                 ValidTo = validTo,

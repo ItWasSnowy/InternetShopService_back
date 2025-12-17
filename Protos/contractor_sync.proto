@@ -175,6 +175,8 @@ message DiscountRule {
   string create_user_id = 13;
   optional string update_user_id = 14;
   optional string comment = 15;
+  optional int32 nomenclature_id = 16;   // ID конкретного товара (IsGroup = false), 0 если скидка на группу
+  optional string nomenclature_name = 17; // Название товара (кэшируется)
 }
 
 // Управление сессиями пользователей интернет-магазина
