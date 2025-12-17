@@ -391,7 +391,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
             Kpp = string.IsNullOrEmpty(contractor.Kpp) ? null : contractor.Kpp,
             LegalAddress = string.IsNullOrEmpty(contractor.Address) ? null : contractor.Address,
             EdoIdentifier = null, // Пока нет в proto
-            HasPostPayment = false, // Пока нет в proto, нужно добавить
+            HasPostPayment = contractor.IsPostPayment,
             IsCreateCabinet = contractor.IsCreateCabinet,
             CreatedAt = createdAt,
             UpdatedAt = updatedAt

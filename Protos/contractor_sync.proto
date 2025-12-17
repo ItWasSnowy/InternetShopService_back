@@ -135,6 +135,7 @@ message Contractor {
   optional string corporate_phone_number = 29;
   optional int64 corporate_phone_changed_at = 30;
   bool is_create_cabinet = 35;  // Флаг создания личного кабинета в интернет-магазине
+  bool is_post_payment = 37;  // Постоплата (контрагент может подтвердить счет без оплаты)
   
   // Служебные поля
   int32 sync_version = 31;

@@ -476,6 +476,7 @@ public class FimBizSyncService : BackgroundService
         counterparty.Kpp = string.IsNullOrEmpty(contractor.Kpp) ? null : contractor.Kpp;
         counterparty.LegalAddress = string.IsNullOrEmpty(contractor.Address) ? null : contractor.Address;
         counterparty.LastSyncVersion = contractor.SyncVersion > 0 ? contractor.SyncVersion : null;
+        counterparty.HasPostPayment = contractor.IsPostPayment;
         counterparty.IsCreateCabinet = contractor.IsCreateCabinet;
         counterparty.UpdatedAt = DateTime.UtcNow;
 
