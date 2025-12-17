@@ -982,7 +982,7 @@ public class FimBizSyncService : BackgroundService
         {
             GrpcOrderStatus.Processing => OrderStatus.Processing,
             GrpcOrderStatus.WaitingForPayment => OrderStatus.AwaitingPayment,
-            GrpcOrderStatus.BillConfirmed => OrderStatus.InvoiceConfirmed,
+            GrpcOrderStatus.PaymentConfirmed => OrderStatus.InvoiceConfirmed,
             GrpcOrderStatus.Manufacturing => OrderStatus.Manufacturing,
             GrpcOrderStatus.Picking => OrderStatus.Assembling,
             GrpcOrderStatus.TransferredToTransport => OrderStatus.TransferredToCarrier,
@@ -990,6 +990,7 @@ public class FimBizSyncService : BackgroundService
             GrpcOrderStatus.Delivering => OrderStatus.Delivering,
             GrpcOrderStatus.AwaitingPickup => OrderStatus.AwaitingPickup,
             GrpcOrderStatus.Completed => OrderStatus.Received,
+            GrpcOrderStatus.Cancelled => OrderStatus.Cancelled,
             _ => OrderStatus.Processing // По умолчанию
         };
     }

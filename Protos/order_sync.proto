@@ -228,7 +228,7 @@ enum OrderStatus {
 
   WAITING_FOR_PAYMENT = 2;
 
-  BILL_CONFIRMED = 3;
+  PAYMENT_CONFIRMED = 3;  // Счет подтвержден (было BILL_CONFIRMED)
 
   MANUFACTURING = 4;
 
@@ -243,6 +243,8 @@ enum OrderStatus {
   AWAITING_PICKUP = 9;
 
   COMPLETED = 10;
+
+  CANCELLED = 11;
 
 }
 
@@ -264,13 +266,13 @@ enum DeliveryType {
 
 enum BillStatus {
 
-  CREATED = 0;
+  INVOICE_CREATED = 0;
 
-  PAID = 1;
+  INVOICE_PAID = 1;
 
-  CONFIRMED = 2;
+  INVOICE_CONFIRMED = 2;
 
-  CANCELLED = 3;
+  INVOICE_CANCELLED = 3;
 
 }
 

@@ -52,5 +52,22 @@ public class EmailService : IEmailService
         
         return SendEmailAsync(email, subject, body);
     }
+
+    public Task SendOrderCancellationNotificationAsync(string email, Guid orderId, string orderNumber, string? reason)
+    {
+        if (string.IsNullOrEmpty(email))
+        {
+            _logger.LogWarning("Не указан email для отправки уведомления об отмене заказа {OrderId}", orderId);
+            return Task.CompletedTask;
+        }
+
+        var subject = $"Заказ #{orderNumber} отменен";
+        var reasonText = !string.IsNullOrEmpty(reason) 
+            ? $"<br><br>Причина отмены: {reason}" 
+            : "";
+        var body = $"Ваш заказ #{orderNumber} (ID: {orderId}) был отменен.{reasonText}";
+        
+        return SendEmailAsync(email, subject, body);
+    }
 }
 
