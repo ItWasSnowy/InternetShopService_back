@@ -18,11 +18,20 @@ public class OrderDto
     public string? Carrier { get; set; } // Название транспортной компании
     public List<OrderAttachmentDto> Attachments { get; set; } = new();
     public InvoiceInfoDto? Invoice { get; set; } // Информация о счете
+    public List<OrderStatusHistoryDto> StatusHistory { get; set; } = new(); // История изменения статусов
 }
 
 public class InvoiceInfoDto
 {
     public string? PdfUrl { get; set; } // Относительный URL (например, "/Files/OrderFiles/123/bill.pdf")
+}
+
+public class OrderStatusHistoryDto
+{
+    public OrderStatus Status { get; set; }
+    public string StatusName { get; set; } = string.Empty;
+    public DateTime ChangedAt { get; set; }
+    public string? Comment { get; set; }
 }
 
 public class OrderItemDto

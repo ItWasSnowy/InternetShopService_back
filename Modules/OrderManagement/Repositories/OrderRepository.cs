@@ -41,6 +41,7 @@ public class OrderRepository : IOrderRepository
             .Include(o => o.Items)
             .Include(o => o.DeliveryAddress)
             .Include(o => o.CargoReceiver)
+            .Include(o => o.StatusHistory)
             .Where(o => o.UserAccountId == userId)
             .OrderByDescending(o => o.CreatedAt)
             .ToListAsync();
@@ -57,6 +58,7 @@ public class OrderRepository : IOrderRepository
             .Include(o => o.Items)
             .Include(o => o.DeliveryAddress)
             .Include(o => o.CargoReceiver)
+            .Include(o => o.StatusHistory)
             .AsSplitQuery() // Разделяем запрос на несколько SQL запросов для лучшей производительности
             .OrderByDescending(o => o.CreatedAt)
             .Skip((page - 1) * pageSize)

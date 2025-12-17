@@ -338,7 +338,16 @@ public class OrderService : IOrderService
                 ContentType = a.ContentType,
                 IsVisibleToCustomer = a.IsVisibleToCustomer,
                 CreatedAt = a.CreatedAt
-            }).ToList()
+            }).ToList(),
+            StatusHistory = order.StatusHistory
+                .OrderBy(h => h.ChangedAt)
+                .Select(h => new OrderStatusHistoryDto
+                {
+                    Status = h.Status,
+                    StatusName = GetStatusName(h.Status),
+                    ChangedAt = h.ChangedAt,
+                    Comment = h.Comment
+                }).ToList()
         };
 
         // Загружаем адрес доставки, если есть
