@@ -11,6 +11,7 @@ public enum OrderStatus
     DeliveringByCarrier = 7,           // Доставляется транспортной компанией
     Delivering = 8,                    // Доставляется
     AwaitingPickup = 9,                // Ожидает получения
-    Received = 10                      // Получен
+    Received = 10,                     // Получен
+    Cancelled = 11                     // Отменен
 }
 

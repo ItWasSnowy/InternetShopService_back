@@ -415,6 +415,7 @@ public class OrderService : IOrderService
             OrderStatus.Delivering => "Доставляется",
             OrderStatus.AwaitingPickup => "Ожидает получения",
             OrderStatus.Received => "Получен",
+            OrderStatus.Cancelled => "Отменен",
             _ => "Неизвестный статус"
         };
     }
@@ -685,7 +686,7 @@ public class OrderService : IOrderService
         {
             OrderStatus.Processing => GrpcOrderStatus.Processing,
             OrderStatus.AwaitingPayment => GrpcOrderStatus.WaitingForPayment,
-            OrderStatus.InvoiceConfirmed => GrpcOrderStatus.BillConfirmed,
+            OrderStatus.InvoiceConfirmed => GrpcOrderStatus.PaymentConfirmed,
             OrderStatus.Manufacturing => GrpcOrderStatus.Manufacturing,
             OrderStatus.Assembling => GrpcOrderStatus.Picking,
             OrderStatus.TransferredToCarrier => GrpcOrderStatus.TransferredToTransport,
@@ -693,6 +694,7 @@ public class OrderService : IOrderService
             OrderStatus.Delivering => GrpcOrderStatus.Delivering,
             OrderStatus.AwaitingPickup => GrpcOrderStatus.AwaitingPickup,
             OrderStatus.Received => GrpcOrderStatus.Completed,
+            OrderStatus.Cancelled => GrpcOrderStatus.Cancelled,
             _ => (GrpcOrderStatus)0 // OrderStatusUnspecified = 0
         };
     }
@@ -1097,5 +1099,91 @@ public class OrderService : IOrderService
             _logger.LogError(ex, "Ошибка при сохранении файла {FileName} локально", fileName);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Отменяет заказ (разрешено только со статусов Processing и AwaitingPayment)
+    /// </summary>
+    public async Task<OrderDto> CancelOrderAsync(Guid orderId, Guid userId, string? reason)
+    {
+        // Получаем заказ
+        var order = await _orderRepository.GetByIdAsync(orderId);
+        if (order == null)
+            throw new InvalidOperationException("Заказ не найден");
+
+        // Проверяем, что заказ принадлежит пользователю
+        if (order.UserAccountId != userId)
+            throw new UnauthorizedAccessException("Заказ не принадлежит текущему пользователю");
+
+        // Валидация: отмена разрешена только со статусов Processing и AwaitingPayment
+        if (order.Status != OrderStatus.Processing && order.Status != OrderStatus.AwaitingPayment)
+        {
+            throw new InvalidOperationException(
+                "Отмена заказа возможна только со статусов 'Обрабатывается' или 'Ожидает оплаты'");
+        }
+
+        // Проверяем, что заказ уже не отменен
+        if (order.Status == OrderStatus.Cancelled)
+        {
+            throw new InvalidOperationException("Заказ уже отменен");
+        }
+
+        var oldStatus = order.Status;
+        order.Status = OrderStatus.Cancelled;
+        order.UpdatedAt = DateTime.UtcNow;
+
+        // Добавляем запись в историю статусов с комментарием (причина отмены)
+        var statusHistory = new OrderStatusHistory
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            Status = OrderStatus.Cancelled,
+            ChangedAt = DateTime.UtcNow,
+            Comment = !string.IsNullOrEmpty(reason) ? $"Отменен пользователем. Причина: {reason}" : "Отменен пользователем"
+        };
+        order.StatusHistory.Add(statusHistory);
+
+        order = await _orderRepository.UpdateAsync(order);
+
+        _logger.LogInformation("Заказ {OrderId} отменен пользователем {UserId}. Статус изменен с {OldStatus} на {NewStatus}. Причина: {Reason}", 
+            orderId, userId, oldStatus, OrderStatus.Cancelled, reason ?? "не указана");
+
+        // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
+        if (order.FimBizOrderId.HasValue)
+        {
+            try
+            {
+                await SendOrderStatusUpdateToFimBizAsync(order, OrderStatus.Cancelled);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при отправке обновления статуса отмены заказа {OrderId} в FimBiz", orderId);
+                // Не прерываем выполнение, заказ уже отменен локально
+            }
+        }
+
+        // Отправляем уведомление на email контрагента об отмене заказа
+        try
+        {
+            var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
+            if (counterparty != null && !string.IsNullOrEmpty(counterparty.Email))
+            {
+                await _emailService.SendOrderCancellationNotificationAsync(
+                    counterparty.Email,
+                    order.Id,
+                    order.OrderNumber,
+                    reason);
+                
+                _logger.LogInformation("Отправлено уведомление об отмене заказа {OrderId} на email {Email}", 
+                    order.Id, counterparty.Email);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при отправке уведомления об отмене заказа {OrderId}", orderId);
+            // Не прерываем выполнение при ошибке отправки уведомления
+        }
+
+        return await MapToOrderDtoAsync(order);
     }
 }

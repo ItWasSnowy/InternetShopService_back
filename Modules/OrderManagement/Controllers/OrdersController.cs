@@ -195,5 +195,36 @@ public class OrdersController : ControllerBase
             return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
         }
     }
+
+    /// <summary>
+    /// Отменить заказ (разрешено только со статусов Processing и AwaitingPayment)
+    /// </summary>
+    [HttpPost("{id}/cancel")]
+    public async Task<IActionResult> CancelOrder(Guid id, [FromBody] CancelOrderDto? dto)
+    {
+        var userId = HttpContext.GetUserId();
+        if (userId == null)
+        {
+            return Unauthorized(new { error = "Пользователь не авторизован" });
+        }
+
+        try
+        {
+            var order = await _orderService.CancelOrderAsync(id, userId.Value, dto?.Reason);
+            return Ok(order);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (Exception)
+        {
+            return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
+        }
+    }
 }
 

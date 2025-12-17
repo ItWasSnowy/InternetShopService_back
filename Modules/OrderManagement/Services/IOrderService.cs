@@ -27,5 +27,10 @@ public interface IOrderService
     /// Загружает файл к заказу
     /// </summary>
     Task<OrderAttachmentDto> UploadAttachmentAsync(Guid orderId, Guid userId, Microsoft.AspNetCore.Http.IFormFile file);
+    
+    /// <summary>
+    /// Отменяет заказ (разрешено только со статусов Processing и AwaitingPayment)
+    /// </summary>
+    Task<OrderDto> CancelOrderAsync(Guid orderId, Guid userId, string? reason);
 }
 
