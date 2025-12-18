@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Text;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -14,6 +15,7 @@ using InternetShopService_back.Infrastructure.Calls;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Jwt;
 using InternetShopService_back.Infrastructure.Notifications;
+using InternetShopService_back.Infrastructure.Serialization;
 using InternetShopService_back.Middleware;
 using InternetShopService_back.Infrastructure.Sync;
 using OrderSyncService = InternetShopService_back.Infrastructure.Sync.OrderSyncService;
@@ -26,7 +28,19 @@ using InternetShopService_back.Shared.Repositories;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        // Настройка сериализации DateTime в UTC формате ISO 8601
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        
+        // Конвертер для DateTime - всегда сериализует в UTC ISO 8601 формате (с Z в конце)
+        // Пример: "2024-01-15T10:30:00.000Z"
+        options.JsonSerializerOptions.Converters.Add(new JsonConverterForDateTimeUtc());
+        
+        // Конвертер для DateTime? (nullable) - всегда сериализует в UTC ISO 8601 формате (с Z в конце)
+        options.JsonSerializerOptions.Converters.Add(new JsonConverterForNullableDateTimeUtc());
+    });
 
 // Добавляем поддержку forwarded headers для работы за прокси (IIS)
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
