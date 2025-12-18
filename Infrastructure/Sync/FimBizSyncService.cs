@@ -627,16 +627,19 @@ public class FimBizSyncService : BackgroundService
 
             try
             {
+                var nomenclatureGroupIdGuid = rule.NomenclatureGroupId > 0
+                    ? ConvertInt32ToGuid(rule.NomenclatureGroupId)
+                    : null;
+                var nomenclatureIdGuid = rule.HasNomenclatureId && rule.NomenclatureId > 0
+                    ? ConvertInt32ToGuid(rule.NomenclatureId)
+                    : null;
+
                 var discount = new Discount
                 {
                     Id = Guid.NewGuid(),
                     CounterpartyId = counterparty.Id,
-                    NomenclatureGroupId = rule.NomenclatureGroupId > 0
-                        ? ConvertInt32ToGuid(rule.NomenclatureGroupId)  // Исправлено: используем правильный метод
-                        : null,
-                    NomenclatureId = rule.HasNomenclatureId && rule.NomenclatureId > 0
-                        ? ConvertInt32ToGuid(rule.NomenclatureId)  // Исправлено: используем правильный метод
-                        : null,
+                    NomenclatureGroupId = nomenclatureGroupIdGuid,
+                    NomenclatureId = nomenclatureIdGuid,
                     DiscountPercent = (decimal)rule.DiscountPercent,
                     ValidFrom = validFrom,
                     ValidTo = validTo,
@@ -652,10 +655,16 @@ public class FimBizSyncService : BackgroundService
                 dbContext.Discounts.Add(discount);
                 addedCount++;
                 
-                _logger.LogInformation("Добавлена скидка ID={DiscountId}, Percent={Percent}%, NomenclatureGroupId={GroupId}, NomenclatureId={NomenclatureId} для контрагента {ContractorId}",
+                _logger.LogInformation(
+                    "Добавлена скидка ID={DiscountId}, Percent={Percent}%, " +
+                    "NomenclatureGroupId: FimBiz={GroupIdFimBiz}, Guid={GroupIdGuid}, " +
+                    "NomenclatureId: FimBiz={NomenclatureIdFimBiz}, Guid={NomenclatureIdGuid} " +
+                    "для контрагента {ContractorId}",
                     rule.Id, rule.DiscountPercent, 
                     rule.NomenclatureGroupId > 0 ? rule.NomenclatureGroupId.ToString() : "null",
+                    nomenclatureGroupIdGuid?.ToString() ?? "null",
                     rule.HasNomenclatureId && rule.NomenclatureId > 0 ? rule.NomenclatureId.ToString() : "null",
+                    nomenclatureIdGuid?.ToString() ?? "null",
                     contractor.ContractorId);
             }
             catch (Exception ex)
@@ -1079,11 +1088,21 @@ public class FimBizSyncService : BackgroundService
 
     /// <summary>
     /// Преобразование int32 в Guid (для обратной совместимости с FimBiz ID)
+    /// Формат Guid: "00000000-0000-0000-0000-000000000167" где 167 - это значение int32
     /// </summary>
     private static Guid ConvertInt32ToGuid(int value)
     {
+        // Создаем массив из 16 байт (размер Guid)
         var bytes = new byte[16];
-        BitConverter.GetBytes(value).CopyTo(bytes, 0);
+        
+        // Заполняем первые 12 байт нулями
+        // Индексы 0-11 остаются нулями
+        
+        // Помещаем значение int32 в последние 4 байта (индексы 12-15)
+        // Используем little-endian порядок байтов (стандарт для .NET)
+        var int32Bytes = BitConverter.GetBytes(value);
+        Array.Copy(int32Bytes, 0, bytes, 12, 4);
+        
         return new Guid(bytes);
     }
 

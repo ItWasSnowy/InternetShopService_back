@@ -1980,11 +1980,21 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
     /// <summary>
     /// Преобразование int32 в Guid (для обратной совместимости с FimBiz ID)
+    /// Формат Guid: "00000000-0000-0000-0000-000000000167" где 167 - это значение int32
     /// </summary>
     private static Guid ConvertInt32ToGuid(int value)
     {
+        // Создаем массив из 16 байт (размер Guid)
         var bytes = new byte[16];
-        BitConverter.GetBytes(value).CopyTo(bytes, 0);
+        
+        // Заполняем первые 12 байт нулями
+        // Индексы 0-11 остаются нулями
+        
+        // Помещаем значение int32 в последние 4 байта (индексы 12-15)
+        // Используем little-endian порядок байтов (стандарт для .NET)
+        var int32Bytes = BitConverter.GetBytes(value);
+        Array.Copy(int32Bytes, 0, bytes, 12, 4);
+        
         return new Guid(bytes);
     }
 
