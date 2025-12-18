@@ -11,20 +11,11 @@ namespace InternetShopService_back.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Конвертация для OrderItems
+            // Для OrderItems: просто удаляем старую колонку и создаем новую
+            // Старые тестовые данные получат значение 0, новые будут работать корректно
             migrationBuilder.Sql(@"
                 ALTER TABLE ""OrderItems"" 
-                ADD COLUMN ""NomenclatureId_temp"" integer NULL;
-                
-                UPDATE ""OrderItems""
-                SET ""NomenclatureId_temp"" = CASE
-                    WHEN ""NomenclatureId""::text LIKE '00000000-0000-0000-0000-%' THEN
-                        CAST(LTRIM(SPLIT_PART(""NomenclatureId""::text, '-', 5), '0') AS integer)
-                    WHEN LTRIM(SPLIT_PART(""NomenclatureId""::text, '-', 5), '0') = '' THEN
-                        0
-                    ELSE
-                        0
-                END;
+                ADD COLUMN ""NomenclatureId_temp"" integer NOT NULL DEFAULT 0;
                 
                 ALTER TABLE ""OrderItems"" 
                 DROP COLUMN ""NomenclatureId"";
@@ -33,23 +24,13 @@ namespace InternetShopService_back.Migrations
                 RENAME COLUMN ""NomenclatureId_temp"" TO ""NomenclatureId"";
                 
                 ALTER TABLE ""OrderItems"" 
-                ALTER COLUMN ""NomenclatureId"" SET NOT NULL;
+                ALTER COLUMN ""NomenclatureId"" DROP DEFAULT;
             ");
 
-            // Конвертация для CartItems
+            // Для CartItems: аналогично
             migrationBuilder.Sql(@"
                 ALTER TABLE ""CartItems"" 
-                ADD COLUMN ""NomenclatureId_temp"" integer NULL;
-                
-                UPDATE ""CartItems""
-                SET ""NomenclatureId_temp"" = CASE
-                    WHEN ""NomenclatureId""::text LIKE '00000000-0000-0000-0000-%' THEN
-                        CAST(LTRIM(SPLIT_PART(""NomenclatureId""::text, '-', 5), '0') AS integer)
-                    WHEN LTRIM(SPLIT_PART(""NomenclatureId""::text, '-', 5), '0') = '' THEN
-                        0
-                    ELSE
-                        0
-                END;
+                ADD COLUMN ""NomenclatureId_temp"" integer NOT NULL DEFAULT 0;
                 
                 ALTER TABLE ""CartItems"" 
                 DROP COLUMN ""NomenclatureId"";
@@ -58,25 +39,13 @@ namespace InternetShopService_back.Migrations
                 RENAME COLUMN ""NomenclatureId_temp"" TO ""NomenclatureId"";
                 
                 ALTER TABLE ""CartItems"" 
-                ALTER COLUMN ""NomenclatureId"" SET NOT NULL;
+                ALTER COLUMN ""NomenclatureId"" DROP DEFAULT;
             ");
 
-            // Конвертация для Discounts (nullable)
+            // Для Discounts: nullable, старые данные станут NULL
             migrationBuilder.Sql(@"
                 ALTER TABLE ""Discounts"" 
                 ADD COLUMN ""NomenclatureId_temp"" integer NULL;
-                
-                UPDATE ""Discounts""
-                SET ""NomenclatureId_temp"" = CASE
-                    WHEN ""NomenclatureId"" IS NULL THEN NULL
-                    WHEN ""NomenclatureId""::text LIKE '00000000-0000-0000-0000-%' THEN
-                        CASE 
-                            WHEN LTRIM(SPLIT_PART(""NomenclatureId""::text, '-', 5), '0') = '' THEN 0
-                            ELSE CAST(LTRIM(SPLIT_PART(""NomenclatureId""::text, '-', 5), '0') AS integer)
-                        END
-                    ELSE
-                        NULL
-                END;
                 
                 ALTER TABLE ""Discounts"" 
                 DROP COLUMN ""NomenclatureId"";
