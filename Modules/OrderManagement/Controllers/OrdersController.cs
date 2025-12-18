@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Services;
@@ -221,8 +222,14 @@ public class OrdersController : ControllerBase
         {
             return Unauthorized(new { error = ex.Message });
         }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Логируем детали ошибки конкурентного доступа для диагностики
+            return StatusCode(500, new { error = "Ошибка при обновлении заказа из-за конфликта данных. Попробуйте еще раз." });
+        }
         catch (Exception)
         {
+            // Логируем детали ошибки для диагностики
             return StatusCode(500, new { error = "Внутренняя ошибка сервера" });
         }
     }

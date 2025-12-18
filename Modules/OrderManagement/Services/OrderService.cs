@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Calls;
@@ -1235,16 +1236,219 @@ public class OrderService : IOrderService
         };
         order.StatusHistory.Add(statusHistory);
 
-        // Сохраняем изменения через репозиторий (как в других методах)
-        order = await _orderRepository.UpdateAsync(order);
+        // Сохраняем изменения через репозиторий с обработкой ошибок конкурентного доступа
+        const int maxRetries = 3;
+        int retryCount = 0;
+        bool updateSuccess = false;
+        
+        _logger.LogInformation(
+            "=== [CANCEL ORDER] Начало отмены заказа {OrderId}. UserId: {UserId}, OldStatus: {OldStatus}, Reason: {Reason}, Попытка: {RetryCount}/{MaxRetries} ===", 
+            orderId, userId, oldStatus, reason ?? "не указана", retryCount + 1, maxRetries);
+        
+        while (retryCount < maxRetries && !updateSuccess)
+        {
+            try
+            {
+                _logger.LogDebug(
+                    "=== [CANCEL ORDER] Попытка обновления заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). Текущий статус в памяти: {CurrentStatus} ===", 
+                    orderId, retryCount + 1, maxRetries, order.Status);
+                
+                order = await _orderRepository.UpdateAsync(order);
+                updateSuccess = true;
+                
+                _logger.LogInformation(
+                    "=== [CANCEL ORDER] Заказ {OrderId} успешно обновлен (попытка {RetryCount}/{MaxRetries}) ===", 
+                    orderId, retryCount + 1, maxRetries);
+            }
+            catch (DbUpdateConcurrencyException ex)
+            {
+                retryCount++;
+                _logger.LogWarning(ex, 
+                    "=== [CANCEL ORDER] DbUpdateConcurrencyException при обновлении заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). " +
+                    "UserId: {UserId}, Reason: {Reason}. Перезагружаем заказ и повторяем обновление. ===", 
+                    orderId, retryCount, maxRetries, userId, reason ?? "не указана");
+                
+                if (retryCount >= maxRetries)
+                {
+                    _logger.LogError(ex, 
+                        "=== [CANCEL ORDER] Не удалось отменить заказ {OrderId} после {MaxRetries} попыток из-за DbUpdateConcurrencyException. " +
+                        "UserId: {UserId}, Reason: {Reason} ===", 
+                        orderId, maxRetries, userId, reason ?? "не указана");
+                    throw;
+                }
+                
+                // Перезагружаем заказ из БД перед повторной попыткой
+                var reloadedOrder = await _orderRepository.GetByIdAsync(orderId);
+                if (reloadedOrder == null)
+                {
+                    _logger.LogError(
+                        "=== [CANCEL ORDER] Заказ {OrderId} не найден при перезагрузке после DbUpdateConcurrencyException. " +
+                        "UserId: {UserId}, Reason: {Reason}. Возможно, заказ был удалён другим процессом. ===", 
+                        orderId, userId, reason ?? "не указана");
+                    throw new InvalidOperationException($"Заказ {orderId} не найден в базе данных. Возможно, он был удалён другим процессом.");
+                }
+                
+                // Проверяем, что заказ все еще принадлежит пользователю
+                if (reloadedOrder.UserAccountId != userId)
+                {
+                    _logger.LogWarning(
+                        "=== [CANCEL ORDER] Заказ {OrderId} больше не принадлежит пользователю {UserId} после перезагрузки ===", 
+                        orderId, userId);
+                    throw new UnauthorizedAccessException("Заказ не принадлежит текущему пользователю");
+                }
+                
+                // Проверяем, что заказ еще не отменен другим процессом
+                if (reloadedOrder.Status == OrderStatus.Cancelled)
+                {
+                    _logger.LogInformation(
+                        "=== [CANCEL ORDER] Заказ {OrderId} уже отменен другим процессом. Возвращаем текущее состояние. ===", 
+                        orderId);
+                    order = reloadedOrder;
+                    updateSuccess = true;
+                    break;
+                }
+                
+                // Проверяем, что статус все еще позволяет отмену
+                if (reloadedOrder.Status != OrderStatus.Processing && reloadedOrder.Status != OrderStatus.AwaitingPayment)
+                {
+                    _logger.LogWarning(
+                        "=== [CANCEL ORDER] Статус заказа {OrderId} изменился на {NewStatus} и больше не позволяет отмену. " +
+                        "Старый статус: {OldStatus} ===", 
+                        orderId, reloadedOrder.Status, oldStatus);
+                    throw new InvalidOperationException(
+                        $"Статус заказа изменился на '{GetStatusName(reloadedOrder.Status)}'. Отмена заказа возможна только со статусов 'Обрабатывается' или 'Ожидает оплаты'");
+                }
+                
+                // Применяем изменения к перезагруженному заказу
+                reloadedOrder.Status = OrderStatus.Cancelled;
+                reloadedOrder.UpdatedAt = DateTime.UtcNow;
+                
+                // Проверяем, нет ли уже записи в истории статусов с таким же статусом и временем
+                var existingCancelledHistory = reloadedOrder.StatusHistory?
+                    .Where(h => h.Status == OrderStatus.Cancelled)
+                    .OrderByDescending(h => h.ChangedAt)
+                    .FirstOrDefault();
+                
+                if (existingCancelledHistory == null)
+                {
+                    // Добавляем запись в историю статусов только если её еще нет
+                    var newStatusHistory = new OrderStatusHistory
+                    {
+                        Id = Guid.NewGuid(),
+                        OrderId = reloadedOrder.Id,
+                        Status = OrderStatus.Cancelled,
+                        ChangedAt = DateTime.UtcNow,
+                        Comment = !string.IsNullOrEmpty(reason) ? $"Отменен пользователем. Причина: {reason}" : "Отменен пользователем"
+                    };
+                    reloadedOrder.StatusHistory.Add(newStatusHistory);
+                    _logger.LogInformation(
+                        "Добавлена запись в историю статусов для перезагруженного заказа {OrderId}: {OldStatus} -> Cancelled", 
+                        orderId, oldStatus);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Запись в историю статусов для перезагруженного заказа {OrderId} уже существует, пропускаем добавление", 
+                        orderId);
+                }
+                
+                order = reloadedOrder;
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("не найден в базе данных"))
+            {
+                retryCount++;
+                _logger.LogError(ex, 
+                    "=== [CANCEL ORDER] Заказ {OrderId} не найден в базе данных при попытке обновления (попытка {RetryCount}/{MaxRetries}). " +
+                    "UserId: {UserId}, Reason: {Reason}. Возможно, заказ был удалён другим процессом. ===", 
+                    orderId, retryCount, maxRetries, userId, reason ?? "не указана");
+                
+                if (retryCount >= maxRetries)
+                {
+                    throw;
+                }
+                
+                // Пытаемся найти заказ по ID еще раз
+                var retryOrder = await _orderRepository.GetByIdAsync(orderId);
+                if (retryOrder == null)
+                {
+                    throw new InvalidOperationException($"Заказ {orderId} не найден в базе данных. Возможно, он был удалён другим процессом.");
+                }
+                
+                // Проверяем, что заказ принадлежит пользователю
+                if (retryOrder.UserAccountId != userId)
+                {
+                    _logger.LogWarning(
+                        "=== [CANCEL ORDER] Заказ {OrderId} больше не принадлежит пользователю {UserId} после перезагрузки ===", 
+                        orderId, userId);
+                    throw new UnauthorizedAccessException("Заказ не принадлежит текущему пользователю");
+                }
+                
+                // Проверяем, что заказ еще не отменен другим процессом
+                if (retryOrder.Status == OrderStatus.Cancelled)
+                {
+                    _logger.LogInformation(
+                        "=== [CANCEL ORDER] Заказ {OrderId} уже отменен другим процессом. Возвращаем текущее состояние. ===", 
+                        orderId);
+                    order = retryOrder;
+                    updateSuccess = true;
+                    break;
+                }
+                
+                // Проверяем, что статус все еще позволяет отмену
+                if (retryOrder.Status != OrderStatus.Processing && retryOrder.Status != OrderStatus.AwaitingPayment)
+                {
+                    _logger.LogWarning(
+                        "=== [CANCEL ORDER] Статус заказа {OrderId} изменился на {NewStatus} и больше не позволяет отмену. " +
+                        "Старый статус: {OldStatus} ===", 
+                        orderId, retryOrder.Status, oldStatus);
+                    throw new InvalidOperationException(
+                        $"Статус заказа изменился на '{GetStatusName(retryOrder.Status)}'. Отмена заказа возможна только со статусов 'Обрабатывается' или 'Ожидает оплаты'");
+                }
+                
+                // Применяем изменения к перезагруженному заказу
+                retryOrder.Status = OrderStatus.Cancelled;
+                retryOrder.UpdatedAt = DateTime.UtcNow;
+                
+                // Проверяем, нет ли уже записи в истории статусов
+                var existingCancelledHistoryRetry = retryOrder.StatusHistory?
+                    .Where(h => h.Status == OrderStatus.Cancelled)
+                    .OrderByDescending(h => h.ChangedAt)
+                    .FirstOrDefault();
+                
+                if (existingCancelledHistoryRetry == null)
+                {
+                    // Добавляем запись в историю статусов только если её еще нет
+                    var newStatusHistoryRetry = new OrderStatusHistory
+                    {
+                        Id = Guid.NewGuid(),
+                        OrderId = retryOrder.Id,
+                        Status = OrderStatus.Cancelled,
+                        ChangedAt = DateTime.UtcNow,
+                        Comment = !string.IsNullOrEmpty(reason) ? $"Отменен пользователем. Причина: {reason}" : "Отменен пользователем"
+                    };
+                    retryOrder.StatusHistory.Add(newStatusHistoryRetry);
+                    _logger.LogInformation(
+                        "Добавлена запись в историю статусов для перезагруженного заказа {OrderId} (retry): {OldStatus} -> Cancelled", 
+                        orderId, oldStatus);
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Запись в историю статусов для перезагруженного заказа {OrderId} (retry) уже существует, пропускаем добавление", 
+                        orderId);
+                }
+                
+                order = retryOrder;
+            }
+        }
 
         // Перезагружаем заказ из БД с загруженными связанными коллекциями для MapToOrderDtoAsync
-        var reloadedOrder = await _orderRepository.GetByIdAsync(orderId);
-        if (reloadedOrder == null)
+        var finalOrder = await _orderRepository.GetByIdAsync(orderId);
+        if (finalOrder == null)
         {
             throw new InvalidOperationException($"Заказ {orderId} не найден после обновления");
         }
-        order = reloadedOrder;
+        order = finalOrder;
 
         _logger.LogInformation("Заказ {OrderId} отменен пользователем {UserId}. Статус изменен с {OldStatus} на {NewStatus}. Причина: {Reason}", 
             orderId, userId, oldStatus, OrderStatus.Cancelled, reason ?? "не указана");
