@@ -255,10 +255,38 @@ public class OrderSyncService : BackgroundService
                     RequiresManufacturing = false
                 };
 
+                // Логируем исходное значение NomenclatureId
+                _logger.LogDebug("Обработка позиции заказа: NomenclatureId={NomenclatureId}, NomenclatureName={NomenclatureName}", 
+                    item.NomenclatureId, item.NomenclatureName);
+
                 if (item.NomenclatureId != Guid.Empty)
                 {
+                    // Берем последние 4 байта Guid для конвертации в int32
+                    // Это нужно, потому что в FimBiz NomenclatureId хранится как int32,
+                    // а мы используем Guid, где число хранится в последних байтах
+                    // Например: "00000000-0000-0000-0000-000000000167" -> 167 (hex) = 359 (decimal)
                     var bytes = item.NomenclatureId.ToByteArray();
-                    grpcItem.NomenclatureId = BitConverter.ToInt32(bytes, 0);
+                    // Берем последние 4 байта (индексы 12-15)
+                    var nomenclatureIdInt32 = BitConverter.ToInt32(bytes, 12);
+                    
+                    // Проверяем, что получилось валидное значение
+                    if (nomenclatureIdInt32 != 0)
+                    {
+                        grpcItem.NomenclatureId = nomenclatureIdInt32;
+                        
+                        _logger.LogInformation("Конвертация NomenclatureId: Guid={Guid} -> int32={Int32}", 
+                            item.NomenclatureId, nomenclatureIdInt32);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("NomenclatureId конвертировался в 0. Guid={Guid}. Поле не будет отправлено в FimBiz", 
+                            item.NomenclatureId);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Позиция заказа имеет пустой NomenclatureId (Guid.Empty). Поле не будет отправлено в FimBiz. OrderId={OrderId}, ItemName={ItemName}", 
+                        order.Id, item.NomenclatureName);
                 }
 
                 createOrderRequest.Items.Add(grpcItem);

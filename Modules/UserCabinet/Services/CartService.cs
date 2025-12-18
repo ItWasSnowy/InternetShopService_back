@@ -391,39 +391,75 @@ public class CartService : ICartService
             throw new InvalidOperationException("Пользователь не найден");
         }
 
-        // Получаем корзину пользователя
-        var cart = await _cartRepository.GetByUserIdAsync(userId);
-        if (cart == null || !cart.Items.Any())
+        List<CreateOrderItemDto> orderItems;
+
+        // Если фронтенд передал OrderItems, используем их
+        if (dto.OrderItems != null && dto.OrderItems.Any())
         {
-            throw new InvalidOperationException("Корзина пуста");
-        }
-
-        // Получаем скидки контрагента
-        var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
-
-        // Преобразуем товары из корзины в формат для заказа
-        var orderItems = cart.Items.Select(item =>
-        {
-            var discount = FindDiscountForItem(item.NomenclatureId, discounts);
-            var discountPercent = discount?.DiscountPercent ?? 0;
-
-            return new CreateOrderItemDto
+            _logger.LogInformation("Создание заказа из переданных OrderItems (количество: {Count})", dto.OrderItems.Count);
+            
+            // Получаем скидки контрагента
+            var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
+            
+            // Применяем скидки к переданным позициям
+            orderItems = dto.OrderItems.Select(item =>
             {
-                NomenclatureId = item.NomenclatureId,
-                NomenclatureName = item.NomenclatureName,
-                Quantity = item.Quantity,
-                Price = item.Price,
-                UrlPhotos = DeserializeUrlPhotos(item.UrlPhotosJson) // Копируем URL фото из корзины
-            };
-        }).ToList();
+                var discount = FindDiscountForItem(item.NomenclatureId, discounts);
+                var discountPercent = discount?.DiscountPercent ?? 0;
+                
+                return new CreateOrderItemDto
+                {
+                    NomenclatureId = item.NomenclatureId,
+                    NomenclatureName = item.NomenclatureName,
+                    Quantity = item.Quantity,
+                    Price = item.Price, // Используем цену из запроса
+                    UrlPhotos = item.UrlPhotos
+                };
+            }).ToList();
+        }
+        else
+        {
+            // Используем корзину, если OrderItems не переданы
+            var cart = await _cartRepository.GetByUserIdAsync(userId);
+            if (cart == null || !cart.Items.Any())
+            {
+                throw new InvalidOperationException("Корзина пуста");
+            }
+
+            // Получаем скидки контрагента
+            var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
+
+            // Преобразуем товары из корзины в формат для заказа
+            orderItems = cart.Items.Select(item =>
+            {
+                var discount = FindDiscountForItem(item.NomenclatureId, discounts);
+                var discountPercent = discount?.DiscountPercent ?? 0;
+
+                return new CreateOrderItemDto
+                {
+                    NomenclatureId = item.NomenclatureId,
+                    NomenclatureName = item.NomenclatureName,
+                    Quantity = item.Quantity,
+                    Price = item.Price,
+                    UrlPhotos = DeserializeUrlPhotos(item.UrlPhotosJson) // Копируем URL фото из корзины
+                };
+            }).ToList();
+        }
 
         // Создаем заказ через OrderService
         var order = await _orderService.CreateOrderFromCartAsync(userId, dto, orderItems);
 
-        // Очищаем корзину после успешного создания заказа
-        await _cartRepository.ClearCartItemsAsync(cart.Id);
-        cart.UpdatedAt = DateTime.UtcNow;
-        await _cartRepository.UpdateAsync(cart);
+        // Очищаем корзину после успешного создания заказа (только если использовали корзину)
+        if (dto.OrderItems == null || !dto.OrderItems.Any())
+        {
+            var cart = await _cartRepository.GetByUserIdAsync(userId);
+            if (cart != null)
+            {
+                await _cartRepository.ClearCartItemsAsync(cart.Id);
+                cart.UpdatedAt = DateTime.UtcNow;
+                await _cartRepository.UpdateAsync(cart);
+            }
+        }
 
         _logger.LogInformation("Создан заказ {OrderId} из корзины пользователя {UserId}", order.Id, userId);
 
