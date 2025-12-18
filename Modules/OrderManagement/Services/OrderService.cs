@@ -309,10 +309,15 @@ public class OrderService : IOrderService
 
     private async Task<OrderDto> MapToOrderDtoAsync(LocalOrder order)
     {
+        // Защита от null коллекций
+        var items = order.Items ?? new List<LocalOrderItem>();
+        var attachments = order.Attachments ?? new List<OrderAttachment>();
+        var statusHistory = order.StatusHistory ?? new List<OrderStatusHistory>();
+
         var dto = new OrderDto
         {
             Id = order.Id,
-            OrderNumber = order.OrderNumber,
+            OrderNumber = order.OrderNumber ?? string.Empty,
             Status = order.Status,
             StatusName = GetStatusName(order.Status),
             DeliveryType = order.DeliveryType,
@@ -320,26 +325,26 @@ public class OrderService : IOrderService
             Carrier = order.Carrier,
             TotalAmount = order.TotalAmount,
             CreatedAt = order.CreatedAt,
-            Items = order.Items.Select(i => new OrderItemDto
+            Items = items.Select(i => new OrderItemDto
             {
                 Id = i.Id,
                 NomenclatureId = i.NomenclatureId,
-                NomenclatureName = i.NomenclatureName,
+                NomenclatureName = i.NomenclatureName ?? string.Empty,
                 Quantity = i.Quantity,
                 Price = i.Price,
                 DiscountPercent = i.DiscountPercent,
                 TotalAmount = i.TotalAmount,
                 UrlPhotos = DeserializeUrlPhotos(i.UrlPhotosJson)
             }).ToList(),
-            Attachments = order.Attachments.Select(a => new OrderAttachmentDto
+            Attachments = attachments.Select(a => new OrderAttachmentDto
             {
                 Id = a.Id,
-                FileName = a.FileName,
+                FileName = a.FileName ?? string.Empty,
                 ContentType = a.ContentType,
                 IsVisibleToCustomer = a.IsVisibleToCustomer,
                 CreatedAt = a.CreatedAt
             }).ToList(),
-            StatusHistory = order.StatusHistory
+            StatusHistory = statusHistory
                 .OrderBy(h => h.ChangedAt)
                 .Select(h => new OrderStatusHistoryDto
                 {
@@ -353,33 +358,51 @@ public class OrderService : IOrderService
         // Загружаем адрес доставки, если есть
         if (order.DeliveryAddressId.HasValue)
         {
-            var address = await _deliveryAddressRepository.GetByIdAsync(order.DeliveryAddressId.Value);
-            if (address != null)
+            try
             {
-                dto.DeliveryAddress = new OrderManagement.DTOs.DeliveryAddressDto
+                var address = await _deliveryAddressRepository.GetByIdAsync(order.DeliveryAddressId.Value);
+                if (address != null)
                 {
-                    Id = address.Id,
-                    Address = address.Address,
-                    City = address.City,
-                    Region = address.Region,
-                    PostalCode = address.PostalCode
-                };
+                    dto.DeliveryAddress = new OrderManagement.DTOs.DeliveryAddressDto
+                    {
+                        Id = address.Id,
+                        Address = address.Address ?? string.Empty,
+                        City = address.City ?? string.Empty,
+                        Region = address.Region,
+                        PostalCode = address.PostalCode
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Ошибка при загрузке адреса доставки {AddressId} для заказа {OrderId}", 
+                    order.DeliveryAddressId.Value, order.Id);
+                // Продолжаем выполнение без адреса
             }
         }
 
         // Загружаем грузополучателя, если есть
         if (order.CargoReceiverId.HasValue)
         {
-            var receiver = await _cargoReceiverRepository.GetByIdAsync(order.CargoReceiverId.Value);
-            if (receiver != null)
+            try
             {
-                dto.CargoReceiver = new OrderManagement.DTOs.CargoReceiverDto
+                var receiver = await _cargoReceiverRepository.GetByIdAsync(order.CargoReceiverId.Value);
+                if (receiver != null)
                 {
-                    Id = receiver.Id,
-                    FullName = receiver.FullName,
-                    PassportSeries = receiver.PassportSeries,
-                    PassportNumber = receiver.PassportNumber
-                };
+                    dto.CargoReceiver = new OrderManagement.DTOs.CargoReceiverDto
+                    {
+                        Id = receiver.Id,
+                        FullName = receiver.FullName ?? string.Empty,
+                        PassportSeries = receiver.PassportSeries,
+                        PassportNumber = receiver.PassportNumber
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Ошибка при загрузке грузополучателя {ReceiverId} для заказа {OrderId}", 
+                    order.CargoReceiverId.Value, order.Id);
+                // Продолжаем выполнение без грузополучателя
             }
         }
 
@@ -1132,6 +1155,12 @@ public class OrderService : IOrderService
         order.Status = OrderStatus.Cancelled;
         order.UpdatedAt = DateTime.UtcNow;
 
+        // Инициализируем StatusHistory, если она null
+        if (order.StatusHistory == null)
+        {
+            order.StatusHistory = new List<OrderStatusHistory>();
+        }
+
         // Добавляем запись в историю статусов с комментарием (причина отмены)
         var statusHistory = new OrderStatusHistory
         {
@@ -1143,7 +1172,15 @@ public class OrderService : IOrderService
         };
         order.StatusHistory.Add(statusHistory);
 
-        order = await _orderRepository.UpdateAsync(order);
+        try
+        {
+            order = await _orderRepository.UpdateAsync(order);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при обновлении заказа {OrderId} при отмене", orderId);
+            throw new InvalidOperationException("Не удалось отменить заказ. Ошибка при сохранении изменений.", ex);
+        }
 
         _logger.LogInformation("Заказ {OrderId} отменен пользователем {UserId}. Статус изменен с {OldStatus} на {NewStatus}. Причина: {Reason}", 
             orderId, userId, oldStatus, OrderStatus.Cancelled, reason ?? "не указана");
@@ -1168,10 +1205,15 @@ public class OrderService : IOrderService
             var counterparty = await _counterpartyRepository.GetByIdAsync(order.CounterpartyId);
             if (counterparty != null && !string.IsNullOrEmpty(counterparty.Email))
             {
+                // Используем OrderNumber или fallback на ID, если OrderNumber пустой
+                var orderNumber = !string.IsNullOrEmpty(order.OrderNumber) 
+                    ? order.OrderNumber 
+                    : order.Id.ToString();
+                
                 await _emailService.SendOrderCancellationNotificationAsync(
                     counterparty.Email,
                     order.Id,
-                    order.OrderNumber,
+                    orderNumber,
                     reason);
                 
                 _logger.LogInformation("Отправлено уведомление об отмене заказа {OrderId} на email {Email}", 
@@ -1184,6 +1226,27 @@ public class OrderService : IOrderService
             // Не прерываем выполнение при ошибке отправки уведомления
         }
 
-        return await MapToOrderDtoAsync(order);
+        // Перезагружаем заказ с навигационными свойствами для корректного маппинга в DTO
+        try
+        {
+            order = await _orderRepository.GetByIdAsync(orderId);
+            if (order == null)
+            {
+                _logger.LogError("Заказ {OrderId} не найден после отмены", orderId);
+                throw new InvalidOperationException("Ошибка при получении обновленного заказа");
+            }
+
+            return await MapToOrderDtoAsync(order);
+        }
+        catch (InvalidOperationException)
+        {
+            // Пробрасываем InvalidOperationException дальше
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при получении или маппинге заказа {OrderId} после отмены", orderId);
+            throw new InvalidOperationException("Ошибка при получении данных об отмененном заказе", ex);
+        }
     }
 }
