@@ -517,8 +517,10 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     }
                     
                     // Проверяем дедупликацию для перезагруженного заказа
+                    // ВАЖНО: Сохраняем старое значение статуса ДО применения изменений
                     var reloadedOldStatus = reloadedOrder.Status;
                     bool reloadedIsDuplicate = false;
+                    bool reloadedStatusChanged = reloadedOldStatus != newStatus;
                     
                     if (reloadedOrder.StatusHistory != null && reloadedOrder.StatusHistory.Any())
                     {
@@ -548,7 +550,9 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                         || request.BillInfo != null
                         || request.UpdInfo != null;
                     
-                    if (reloadedIsDuplicate && !reloadedHasOtherChanges && reloadedOldStatus == newStatus)
+                    // Специальная обработка для Cancelled статуса: даже если статус уже установлен, но нет других изменений,
+                    // мы все равно должны убедиться что все поля обновлены
+                    if (reloadedIsDuplicate && !reloadedHasOtherChanges && !reloadedStatusChanged && newStatus != OrderStatus.Cancelled)
                     {
                         _logger.LogInformation("=== [DUPLICATE NOTIFICATION] Дублирующее уведомление для заказа {OrderId} пропущено после перезагрузки ===", orderId);
                         return new NotifyOrderStatusChangeResponse
@@ -591,7 +595,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     reloadedOrder.SyncedWithFimBizAt = DateTime.UtcNow;
                     
                     // Добавляем запись в историю статусов, если статус изменился и это не дубликат
-                    if (reloadedOrder.Status != newStatus && !reloadedIsDuplicate)
+                    // ИСПРАВЛЕНО: Используем reloadedStatusChanged (сохраненное значение ДО установки статуса) вместо проверки после установки
+                    if (reloadedStatusChanged && !reloadedIsDuplicate)
                     {
                         var statusHistory = new OrderStatusHistory
                         {
@@ -602,6 +607,12 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                             ChangedAt = statusChangedAt
                         };
                         reloadedOrder.StatusHistory.Add(statusHistory);
+                        _logger.LogInformation("Добавлена запись в историю статусов для перезагруженного заказа {OrderId}: {OldStatus} -> {NewStatus}", 
+                            orderId, reloadedOldStatus, newStatus);
+                    }
+                    else if (reloadedIsDuplicate)
+                    {
+                        _logger.LogInformation("Запись в историю статусов для перезагруженного заказа {OrderId} не добавлена - дубликат уведомления", orderId);
                     }
                     
                     // Обрабатываем bill_info и upd_info, если они переданы
@@ -625,6 +636,13 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 await SendOrderStatusNotificationAsync(order, newStatus);
             }
 
+            // Специальное логирование для успешной обработки Cancelled статуса
+            if (newStatus == OrderStatus.Cancelled && oldStatus != newStatus)
+            {
+                _logger.LogInformation("=== [ORDER STATUS CHANGE] Статус Cancelled успешно обработан для заказа {OrderId}. Старый статус: {OldStatus}, Новый статус: {NewStatus}, FimBizOrderId: {FimBizOrderId} ===", 
+                    orderId, oldStatus, newStatus, order.FimBizOrderId?.ToString() ?? "не указан");
+            }
+
             _logger.LogInformation("Заказ {OrderId} успешно обновлен. Статус: {OldStatus} -> {NewStatus}, FimBizOrderId: {FimBizOrderId}", 
                 orderId, oldStatus, newStatus, order.FimBizOrderId);
 
@@ -640,8 +658,20 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         }
         catch (Exception ex)
         {
+            // Специальное логирование для ошибок при обработке Cancelled статуса
+            if (request != null)
+            {
+                var newStatus = MapGrpcStatusToLocal(request.NewStatus);
+                if (newStatus == OrderStatus.Cancelled || request.NewStatus == GrpcOrderStatus.Cancelled)
+                {
+                    _logger.LogError(ex, "=== [ORDER STATUS CHANGE] Ошибка при обработке статуса Cancelled для заказа {ExternalOrderId} ===", 
+                        request.ExternalOrderId);
+                    _logger.LogError("ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, GrpcStatus: {GrpcStatus}", 
+                        request.ExternalOrderId, request.FimBizOrderId, request.NewStatus);
+                }
+            }
             _logger.LogError(ex, "Ошибка при обработке уведомления об изменении статуса заказа {ExternalOrderId}", 
-                request.ExternalOrderId);
+                request?.ExternalOrderId ?? "неизвестен");
             throw new RpcException(new Status(StatusCode.Internal, "Internal server error"));
         }
     }

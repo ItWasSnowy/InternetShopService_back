@@ -254,14 +254,42 @@ public class OrderService : IOrderService
         _logger.LogInformation("Статус заказа {OrderId} изменен с {OldStatus} на {NewStatus}", 
             orderId, oldStatus, status);
 
+        // Специальное логирование для статуса Cancelled
+        if (status == OrderStatus.Cancelled)
+        {
+            _logger.LogInformation("=== [CANCELLED STATUS UPDATE] Заказ {OrderId} переведен в статус Cancelled. Старый статус: {OldStatus} ===", 
+                orderId, oldStatus);
+        }
+
         // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
         if (order.FimBizOrderId.HasValue)
         {
+            if (status == OrderStatus.Cancelled)
+            {
+                _logger.LogInformation("=== [CANCELLED STATUS SYNC] Попытка синхронизации статуса Cancelled для заказа {OrderId} с FimBiz. FimBizOrderId: {FimBizOrderId} ===", 
+                    order.Id, order.FimBizOrderId.Value);
+            }
             var syncSuccess = await SendOrderStatusUpdateToFimBizAsync(order, status);
             if (!syncSuccess)
             {
+                if (status == OrderStatus.Cancelled)
+                {
+                    _logger.LogWarning("=== [CANCELLED STATUS SYNC] Не удалось синхронизировать статус Cancelled для заказа {OrderId} с FimBiz, но заказ обновлен локально ===", order.Id);
+                }
                 _logger.LogWarning("Не удалось отправить обновление статуса заказа {OrderId} в FimBiz, но заказ обновлен локально", order.Id);
             }
+            else if (status == OrderStatus.Cancelled)
+            {
+                _logger.LogInformation("=== [CANCELLED STATUS SYNC] Статус Cancelled успешно синхронизирован для заказа {OrderId} с FimBiz ===", order.Id);
+            }
+        }
+        else
+        {
+            if (status == OrderStatus.Cancelled)
+            {
+                _logger.LogWarning("=== [CANCELLED STATUS SYNC] Невозможно синхронизировать статус Cancelled для заказа {OrderId} с FimBiz: FimBizOrderId отсутствует ===", order.Id);
+            }
+            _logger.LogDebug("Заказ {OrderId} не синхронизирован с FimBiz (FimBizOrderId отсутствует), синхронизация статуса пропущена", order.Id);
         }
 
         // Отправляем уведомление на email контрагента при изменении статуса
@@ -674,6 +702,14 @@ public class OrderService : IOrderService
             // Преобразуем статус из нашей модели в gRPC
             var grpcStatus = MapToGrpcOrderStatus(newStatus);
 
+            // Специальное логирование для статуса Cancelled
+            if (newStatus == OrderStatus.Cancelled)
+            {
+                _logger.LogInformation("=== [CANCELLED STATUS SYNC] Отправка статуса Cancelled для заказа {OrderId} в FimBiz ===", order.Id);
+                _logger.LogInformation("OrderId: {OrderId}, OrderNumber: {OrderNumber}, FimBizOrderId: {FimBizOrderId}, CurrentStatus: {CurrentStatus}, NewStatus: {NewStatus}", 
+                    order.Id, order.OrderNumber ?? "не указан", order.FimBizOrderId?.ToString() ?? "не указан", order.Status, newStatus);
+            }
+
             var updateRequest = new UpdateOrderStatusRequest
             {
                 ExternalOrderId = order.Id.ToString(),
@@ -688,12 +724,21 @@ public class OrderService : IOrderService
 
             if (response.Success)
             {
+                if (newStatus == OrderStatus.Cancelled)
+                {
+                    _logger.LogInformation("=== [CANCELLED STATUS SYNC] Статус Cancelled успешно отправлен в FimBiz для заказа {OrderId} ===", order.Id);
+                }
                 _logger.LogInformation("Статус заказа {OrderId} успешно обновлен в FimBiz. Response.Success: {Success}, Response.Message: {Message}", 
                     order.Id, response.Success, response.Message ?? "нет сообщения");
                 return true;
             }
             else
             {
+                if (newStatus == OrderStatus.Cancelled)
+                {
+                    _logger.LogWarning("=== [CANCELLED STATUS SYNC] Не удалось отправить статус Cancelled в FimBiz для заказа {OrderId} ===", order.Id);
+                    _logger.LogWarning("Response.Success: {Success}, Response.Message: {Message}", response.Success, response.Message ?? "Неизвестная ошибка");
+                }
                 _logger.LogWarning("Не удалось обновить статус заказа {OrderId} в FimBiz. Response.Success: {Success}, Response.Message: {Message}", 
                     order.Id, response.Success, response.Message ?? "Неизвестная ошибка");
                 return false;
@@ -701,12 +746,21 @@ public class OrderService : IOrderService
         }
         catch (Grpc.Core.RpcException ex)
         {
+            if (newStatus == OrderStatus.Cancelled)
+            {
+                _logger.LogError(ex, "=== [CANCELLED STATUS SYNC] Ошибка gRPC при отправке статуса Cancelled для заказа {OrderId} в FimBiz ===", order.Id);
+                _logger.LogError("StatusCode: {StatusCode}, Detail: {Detail}, Message: {Message}", ex.StatusCode, ex.Status.Detail, ex.Message);
+            }
             _logger.LogError(ex, "Ошибка gRPC при обновлении статуса заказа {OrderId} в FimBiz. StatusCode: {StatusCode}, Detail: {Detail}", 
                 order.Id, ex.StatusCode, ex.Status.Detail);
             return false;
         }
         catch (Exception ex)
         {
+            if (newStatus == OrderStatus.Cancelled)
+            {
+                _logger.LogError(ex, "=== [CANCELLED STATUS SYNC] Неожиданная ошибка при отправке статуса Cancelled для заказа {OrderId} в FimBiz ===", order.Id);
+            }
             _logger.LogError(ex, "Неожиданная ошибка при обновлении статуса заказа {OrderId} в FimBiz", order.Id);
             return false;
         }
@@ -1190,11 +1244,23 @@ public class OrderService : IOrderService
         // Если заказ синхронизирован с FimBiz, отправляем обновление статуса (без перезагрузки)
         if (order.FimBizOrderId.HasValue)
         {
+            _logger.LogInformation("=== [CANCELLED STATUS SYNC] Попытка синхронизации статуса Cancelled для заказа {OrderId} (отменен пользователем) с FimBiz. FimBizOrderId: {FimBizOrderId}, Причина: {Reason} ===", 
+                order.Id, order.FimBizOrderId.Value, reason ?? "не указана");
             var syncSuccess = await SendOrderStatusUpdateToFimBizAsync(order, OrderStatus.Cancelled);
             if (!syncSuccess)
             {
+                _logger.LogWarning("=== [CANCELLED STATUS SYNC] Не удалось синхронизировать статус Cancelled для заказа {OrderId} (отменен пользователем) с FimBiz, но заказ обновлен локально ===", order.Id);
                 _logger.LogWarning("Не удалось отправить обновление статуса заказа {OrderId} в FimBiz, но заказ обновлен локально", order.Id);
             }
+            else
+            {
+                _logger.LogInformation("=== [CANCELLED STATUS SYNC] Статус Cancelled успешно синхронизирован для заказа {OrderId} (отменен пользователем) с FimBiz ===", order.Id);
+            }
+        }
+        else
+        {
+            _logger.LogWarning("=== [CANCELLED STATUS SYNC] Невозможно синхронизировать статус Cancelled для заказа {OrderId} (отменен пользователем) с FimBiz: FimBizOrderId отсутствует ===", order.Id);
+            _logger.LogDebug("Заказ {OrderId} не синхронизирован с FimBiz (FimBizOrderId отсутствует), синхронизация статуса пропущена", order.Id);
         }
 
         // Отправляем уведомление на email контрагента об отмене заказа
