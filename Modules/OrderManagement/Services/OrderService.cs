@@ -1238,10 +1238,18 @@ public class OrderService : IOrderService
         // Сохраняем изменения через репозиторий (как в других методах)
         order = await _orderRepository.UpdateAsync(order);
 
+        // Перезагружаем заказ из БД с загруженными связанными коллекциями для MapToOrderDtoAsync
+        var reloadedOrder = await _orderRepository.GetByIdAsync(orderId);
+        if (reloadedOrder == null)
+        {
+            throw new InvalidOperationException($"Заказ {orderId} не найден после обновления");
+        }
+        order = reloadedOrder;
+
         _logger.LogInformation("Заказ {OrderId} отменен пользователем {UserId}. Статус изменен с {OldStatus} на {NewStatus}. Причина: {Reason}", 
             orderId, userId, oldStatus, OrderStatus.Cancelled, reason ?? "не указана");
 
-        // Если заказ синхронизирован с FimBiz, отправляем обновление статуса (без перезагрузки)
+        // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
         if (order.FimBizOrderId.HasValue)
         {
             _logger.LogInformation("=== [CANCELLED STATUS SYNC] Попытка синхронизации статуса Cancelled для заказа {OrderId} (отменен пользователем) с FimBiz. FimBizOrderId: {FimBizOrderId}, Причина: {Reason} ===", 
@@ -1290,7 +1298,7 @@ public class OrderService : IOrderService
             // Не прерываем выполнение при ошибке отправки уведомления
         }
 
-        // Возвращаем DTO (используем объект order после UpdateAsync, как в других методах)
+        // Возвращаем DTO (используем перезагруженный заказ с загруженными связанными коллекциями)
         return await MapToOrderDtoAsync(order);
     }
 }

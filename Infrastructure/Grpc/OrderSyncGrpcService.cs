@@ -1589,45 +1589,93 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // Сохраняем только относительный URL - фронт сам обработает
             string? pdfUrl = billInfo.PdfUrl;
 
-            // Проверяем, существует ли уже счет для этого заказа
-            var existingInvoice = await _dbContext.Invoices
-                .FirstOrDefaultAsync(i => i.OrderId == order.Id);
+            // Обрабатываем DbUpdateConcurrencyException с повторной попыткой
+            const int maxRetries = 3;
+            int retryCount = 0;
+            bool saveSuccess = false;
+            bool isNewInvoice = false;
 
-            bool isNewInvoice = existingInvoice == null;
-
-            if (existingInvoice != null)
+            while (retryCount < maxRetries && !saveSuccess)
             {
-                // Обновляем существующий счет - только URL
-                existingInvoice.PdfUrl = pdfUrl;
-                existingInvoice.UpdatedAt = DateTime.UtcNow;
-
-                _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
-                    order.Id, existingInvoice.Id, pdfUrl ?? "не указан");
-            }
-            else
-            {
-                // Создаем новый счет - только с URL
-                var invoice = new Invoice
+                try
                 {
-                    Id = Guid.NewGuid(),
-                    OrderId = order.Id,
-                    PdfUrl = pdfUrl,
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow
-                };
+                    // Проверяем, существует ли уже счет для этого заказа
+                    var existingInvoice = await _dbContext.Invoices
+                        .FirstOrDefaultAsync(i => i.OrderId == order.Id);
 
-                await _dbContext.Invoices.AddAsync(invoice);
-                order.InvoiceId = invoice.Id;
+                    isNewInvoice = existingInvoice == null;
 
-                _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
-                    order.Id, invoice.Id, pdfUrl ?? "не указан");
+                    if (existingInvoice != null)
+                    {
+                        // Обновляем существующий счет - только URL
+                        existingInvoice.PdfUrl = pdfUrl;
+                        existingInvoice.UpdatedAt = DateTime.UtcNow;
+
+                        _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
+                            order.Id, existingInvoice.Id, pdfUrl ?? "не указан");
+                    }
+                    else
+                    {
+                        // Создаем новый счет - только с URL
+                        var invoice = new Invoice
+                        {
+                            Id = Guid.NewGuid(),
+                            OrderId = order.Id,
+                            PdfUrl = pdfUrl,
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
+                        };
+
+                        await _dbContext.Invoices.AddAsync(invoice);
+                        order.InvoiceId = invoice.Id;
+
+                        _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
+                            order.Id, invoice.Id, pdfUrl ?? "не указан");
+                    }
+
+                    await _dbContext.SaveChangesAsync();
+                    saveSuccess = true;
+                }
+                catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
+                {
+                    retryCount++;
+                    _logger.LogWarning(ex, 
+                        "DbUpdateConcurrencyException при сохранении счета для заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). Перезагружаем счет и повторяем.", 
+                        order.Id, retryCount, maxRetries);
+
+                    if (retryCount >= maxRetries)
+                    {
+                        _logger.LogError(ex, 
+                            "Не удалось сохранить счет для заказа {OrderId} после {MaxRetries} попыток из-за DbUpdateConcurrencyException", 
+                            order.Id, maxRetries);
+                        // Не пробрасываем исключение дальше, чтобы не прервать обработку заказа
+                        // Просто логируем ошибку и продолжаем
+                        return;
+                    }
+
+                    // Отменяем изменения в текущем контексте
+                    var changedEntries = _dbContext.ChangeTracker.Entries()
+                        .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added 
+                                 || e.State == Microsoft.EntityFrameworkCore.EntityState.Modified 
+                                 || e.State == Microsoft.EntityFrameworkCore.EntityState.Deleted)
+                        .ToList();
+                    foreach (var entry in changedEntries)
+                    {
+                        entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                    }
+
+                    // Перезагружаем заказ из БД, чтобы получить актуальный InvoiceId
+                    var reloadedOrder = await _orderRepository.GetByIdAsync(order.Id);
+                    if (reloadedOrder != null && reloadedOrder.InvoiceId.HasValue)
+                    {
+                        order.InvoiceId = reloadedOrder.InvoiceId;
+                    }
+                }
             }
-
-            await _dbContext.SaveChangesAsync();
 
             // Отправляем уведомление контрагенту о создании/обновлении счета
             // Для email формируем полный URL, если он относительный
-            if (isNewInvoice || !string.IsNullOrEmpty(pdfUrl))
+            if (saveSuccess && (isNewInvoice || !string.IsNullOrEmpty(pdfUrl)))
             {
                 string? fullPdfUrlForEmail = pdfUrl;
                 if (!string.IsNullOrEmpty(pdfUrl) && !pdfUrl.StartsWith("http://") && !pdfUrl.StartsWith("https://"))
@@ -1694,54 +1742,98 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     {
         try
         {
-            // Проверяем, существует ли уже УПД для этого заказа
-            var existingUpd = await _dbContext.UpdDocuments
-                .FirstOrDefaultAsync(u => u.OrderId == order.Id);
+            // Обрабатываем DbUpdateConcurrencyException с повторной попыткой
+            const int maxRetries = 3;
+            int retryCount = 0;
+            bool saveSuccess = false;
 
-            // УПД требует наличия счета
-            if (order.InvoiceId == null)
+            while (retryCount < maxRetries && !saveSuccess)
             {
-                _logger.LogWarning("Нельзя создать УПД для заказа {OrderId} без счета", order.Id);
-                return;
-            }
-
-            if (existingUpd != null)
-            {
-                // Обновляем существующий УПД
-                existingUpd.DocumentNumber = updInfo.UpdNumber;
-                existingUpd.DocumentDate = updInfo.CreatedAt > 0 
-                    ? DateTimeOffset.FromUnixTimeSeconds(updInfo.CreatedAt).UtcDateTime 
-                    : DateTime.UtcNow;
-                existingUpd.UpdatedAt = DateTime.UtcNow;
-
-                _logger.LogInformation("Обновлен УПД для заказа {OrderId}. UpdId: {UpdId}, UpdNumber: {UpdNumber}", 
-                    order.Id, existingUpd.Id, updInfo.UpdNumber);
-            }
-            else
-            {
-                // Создаем новый УПД
-                var updDocument = new UpdDocument
+                try
                 {
-                    Id = Guid.NewGuid(),
-                    OrderId = order.Id,
-                    InvoiceId = order.InvoiceId.Value,
-                    CounterpartyId = order.CounterpartyId,
-                    DocumentNumber = updInfo.UpdNumber,
-                    DocumentDate = updInfo.CreatedAt > 0 
-                        ? DateTimeOffset.FromUnixTimeSeconds(updInfo.CreatedAt).UtcDateTime 
-                        : DateTime.UtcNow,
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow
-                };
+                    // Отменяем предыдущие изменения в контексте (если это повторная попытка)
+                    if (retryCount > 0)
+                    {
+                        var changedEntries = _dbContext.ChangeTracker.Entries()
+                            .Where(e => (e.Entity is UpdDocument || e.Entity is LocalOrder) 
+                                     && (e.State == Microsoft.EntityFrameworkCore.EntityState.Added 
+                                         || e.State == Microsoft.EntityFrameworkCore.EntityState.Modified 
+                                         || e.State == Microsoft.EntityFrameworkCore.EntityState.Deleted))
+                            .ToList();
+                        foreach (var entry in changedEntries)
+                        {
+                            entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                        }
+                    }
 
-                await _dbContext.UpdDocuments.AddAsync(updDocument);
-                order.UpdDocumentId = updDocument.Id;
+                    // УПД требует наличия счета
+                    if (order.InvoiceId == null)
+                    {
+                        _logger.LogWarning("Нельзя создать УПД для заказа {OrderId} без счета", order.Id);
+                        return;
+                    }
 
-                _logger.LogInformation("Создан новый УПД для заказа {OrderId}. UpdId: {UpdId}, UpdNumber: {UpdNumber}", 
-                    order.Id, updDocument.Id, updInfo.UpdNumber);
+                    // Проверяем, существует ли уже УПД для этого заказа
+                    var existingUpd = await _dbContext.UpdDocuments
+                        .FirstOrDefaultAsync(u => u.OrderId == order.Id);
+
+                    if (existingUpd != null)
+                    {
+                        // Обновляем существующий УПД
+                        existingUpd.DocumentNumber = updInfo.UpdNumber;
+                        existingUpd.DocumentDate = updInfo.CreatedAt > 0 
+                            ? DateTimeOffset.FromUnixTimeSeconds(updInfo.CreatedAt).UtcDateTime 
+                            : DateTime.UtcNow;
+                        existingUpd.UpdatedAt = DateTime.UtcNow;
+
+                        _logger.LogInformation("Обновлен УПД для заказа {OrderId}. UpdId: {UpdId}, UpdNumber: {UpdNumber}", 
+                            order.Id, existingUpd.Id, updInfo.UpdNumber);
+                    }
+                    else
+                    {
+                        // Создаем новый УПД
+                        var updDocument = new UpdDocument
+                        {
+                            Id = Guid.NewGuid(),
+                            OrderId = order.Id,
+                            InvoiceId = order.InvoiceId.Value,
+                            CounterpartyId = order.CounterpartyId,
+                            DocumentNumber = updInfo.UpdNumber,
+                            DocumentDate = updInfo.CreatedAt > 0 
+                                ? DateTimeOffset.FromUnixTimeSeconds(updInfo.CreatedAt).UtcDateTime 
+                                : DateTime.UtcNow,
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
+                        };
+
+                        await _dbContext.UpdDocuments.AddAsync(updDocument);
+                        order.UpdDocumentId = updDocument.Id;
+
+                        _logger.LogInformation("Создан новый УПД для заказа {OrderId}. UpdId: {UpdId}, UpdNumber: {UpdNumber}", 
+                            order.Id, updDocument.Id, updInfo.UpdNumber);
+                    }
+
+                    await _dbContext.SaveChangesAsync();
+                    saveSuccess = true;
+                }
+                catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
+                {
+                    retryCount++;
+                    _logger.LogWarning(ex, 
+                        "DbUpdateConcurrencyException при сохранении УПД для заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). Перезагружаем УПД и повторяем.", 
+                        order.Id, retryCount, maxRetries);
+
+                    if (retryCount >= maxRetries)
+                    {
+                        _logger.LogError(ex, 
+                            "Не удалось сохранить УПД для заказа {OrderId} после {MaxRetries} попыток из-за DbUpdateConcurrencyException", 
+                            order.Id, maxRetries);
+                        // Не пробрасываем исключение дальше, чтобы не прервать обработку заказа
+                        // Просто логируем ошибку и продолжаем
+                        return;
+                    }
+                }
             }
-
-            await _dbContext.SaveChangesAsync();
         }
         catch (Exception ex)
         {
