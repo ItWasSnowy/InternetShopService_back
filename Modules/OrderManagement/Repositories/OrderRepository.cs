@@ -141,6 +141,27 @@ public class OrderRepository : IOrderRepository
             existingEntry.Property(o => o.SyncedWithFimBizAt).IsModified = true;
             existingEntry.Property(o => o.UpdatedAt).IsModified = true;
             
+            // Сохраняем новые записи в истории статусов, если они были добавлены
+            if (order.StatusHistory != null && order.StatusHistory.Count > 0)
+            {
+                // Получаем текущие записи из БД
+                var existingHistoryIds = new HashSet<Guid>(await _context.OrderStatusHistories
+                    .Where(h => h.OrderId == order.Id)
+                    .Select(h => h.Id)
+                    .ToListAsync());
+                
+                // Находим новые записи, которых нет в БД
+                var newHistoryEntries = order.StatusHistory
+                    .Where(h => !existingHistoryIds.Contains(h.Id))
+                    .ToList();
+                
+                // Добавляем новые записи в контекст
+                foreach (var historyEntry in newHistoryEntries)
+                {
+                    _context.OrderStatusHistories.Add(historyEntry);
+                }
+            }
+            
             await _context.SaveChangesAsync();
             return existingOrder;
         }
@@ -153,8 +174,29 @@ public class OrderRepository : IOrderRepository
                 throw new InvalidOperationException($"Заказ с ID {order.Id} не найден в базе данных. Возможно, он был удалён другим процессом.");
             }
             
+            // Обновляем значения свойств из переданного объекта
             // Используем селективное обновление свойств вместо EntityState.Modified
             // Это позволяет избежать проблем с конкурентным доступом
+            entry.Property(o => o.Status).CurrentValue = order.Status;
+            entry.Property(o => o.OrderNumber).CurrentValue = order.OrderNumber;
+            entry.Property(o => o.TotalAmount).CurrentValue = order.TotalAmount;
+            entry.Property(o => o.TrackingNumber).CurrentValue = order.TrackingNumber;
+            entry.Property(o => o.Carrier).CurrentValue = order.Carrier;
+            entry.Property(o => o.DeliveryType).CurrentValue = order.DeliveryType;
+            entry.Property(o => o.IsPriority).CurrentValue = order.IsPriority;
+            entry.Property(o => o.IsLongAssembling).CurrentValue = order.IsLongAssembling;
+            entry.Property(o => o.FimBizOrderId).CurrentValue = order.FimBizOrderId;
+            entry.Property(o => o.InvoiceId).CurrentValue = order.InvoiceId;
+            entry.Property(o => o.UpdDocumentId).CurrentValue = order.UpdDocumentId;
+            entry.Property(o => o.AssembledAt).CurrentValue = order.AssembledAt;
+            entry.Property(o => o.ShippedAt).CurrentValue = order.ShippedAt;
+            entry.Property(o => o.DeliveredAt).CurrentValue = order.DeliveredAt;
+            entry.Property(o => o.AssemblerId).CurrentValue = order.AssemblerId;
+            entry.Property(o => o.DriverId).CurrentValue = order.DriverId;
+            entry.Property(o => o.SyncedWithFimBizAt).CurrentValue = order.SyncedWithFimBizAt;
+            entry.Property(o => o.UpdatedAt).CurrentValue = order.UpdatedAt;
+            
+            // Помечаем свойства как измененные
             entry.Property(o => o.Status).IsModified = true;
             entry.Property(o => o.OrderNumber).IsModified = true;
             entry.Property(o => o.TotalAmount).IsModified = true;
@@ -173,6 +215,27 @@ public class OrderRepository : IOrderRepository
             entry.Property(o => o.DriverId).IsModified = true;
             entry.Property(o => o.SyncedWithFimBizAt).IsModified = true;
             entry.Property(o => o.UpdatedAt).IsModified = true;
+            
+            // Сохраняем новые записи в истории статусов, если они были добавлены
+            if (order.StatusHistory != null && order.StatusHistory.Count > 0)
+            {
+                // Получаем текущие записи из БД
+                var existingHistoryIds = new HashSet<Guid>(await _context.OrderStatusHistories
+                    .Where(h => h.OrderId == order.Id)
+                    .Select(h => h.Id)
+                    .ToListAsync());
+                
+                // Находим новые записи, которых нет в БД
+                var newHistoryEntries = order.StatusHistory
+                    .Where(h => !existingHistoryIds.Contains(h.Id))
+                    .ToList();
+                
+                // Добавляем новые записи в контекст
+                foreach (var historyEntry in newHistoryEntries)
+                {
+                    _context.OrderStatusHistories.Add(historyEntry);
+                }
+            }
             
             await _context.SaveChangesAsync();
             return order;
