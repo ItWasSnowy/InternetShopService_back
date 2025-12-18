@@ -329,7 +329,7 @@ public class CartService : ICartService
         };
     }
 
-    private Discount? FindDiscountForItem(Guid nomenclatureId, List<Discount> discounts)
+    private Discount? FindDiscountForItem(int nomenclatureId, List<Discount> discounts)
     {
         // Сначала ищем скидку на конкретную позицию
         var itemDiscount = discounts.FirstOrDefault(d => 

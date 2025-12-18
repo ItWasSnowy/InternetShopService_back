@@ -12,7 +12,7 @@ public class CartDto
 public class CartItemDto
 {
     public Guid Id { get; set; }
-    public Guid NomenclatureId { get; set; }
+    public int NomenclatureId { get; set; }
     public string NomenclatureName { get; set; } = string.Empty;
     public int Quantity { get; set; }
     public decimal Price { get; set; }
@@ -27,7 +27,7 @@ public class CartItemDto
 public class AddCartItemDto
 {
     [Required(ErrorMessage = "NomenclatureId обязателен")]
-    public Guid NomenclatureId { get; set; }
+    public int NomenclatureId { get; set; }
     
     [Required(ErrorMessage = "Название номенклатуры обязательно")]
     [StringLength(500, ErrorMessage = "Название не должно превышать 500 символов")]

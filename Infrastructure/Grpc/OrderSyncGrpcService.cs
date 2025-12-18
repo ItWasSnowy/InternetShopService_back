@@ -1235,8 +1235,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                         Id = Guid.NewGuid(),
                         OrderId = order.Id,
                         NomenclatureId = grpcItem.HasNomenclatureId && grpcItem.NomenclatureId > 0
-                            ? ConvertInt32ToGuid(grpcItem.NomenclatureId)
-                            : Guid.Empty,
+                            ? grpcItem.NomenclatureId
+                            : 0,
                         NomenclatureName = grpcItem.Name,
                         Quantity = grpcItem.Quantity,
                         Price = (decimal)grpcItem.Price / 100, // Из копеек в рубли
@@ -1459,8 +1459,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                         Id = Guid.NewGuid(),
                         OrderId = order.Id,
                         NomenclatureId = grpcItem.HasNomenclatureId && grpcItem.NomenclatureId > 0
-                            ? ConvertInt32ToGuid(grpcItem.NomenclatureId)
-                            : Guid.Empty,
+                            ? grpcItem.NomenclatureId
+                            : 0,
                         NomenclatureName = grpcItem.Name,
                         Quantity = grpcItem.Quantity,
                         Price = (decimal)grpcItem.Price / 100, // Из копеек в рубли
@@ -1932,8 +1932,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     Id = Guid.NewGuid(),
                     OrderId = order.Id,
                     NomenclatureId = grpcItem.HasNomenclatureId && grpcItem.NomenclatureId > 0
-                        ? ConvertInt32ToGuid(grpcItem.NomenclatureId)
-                        : Guid.Empty,
+                        ? grpcItem.NomenclatureId
+                        : 0,
                     NomenclatureName = grpcItem.Name,
                     Quantity = grpcItem.Quantity,
                     Price = (decimal)grpcItem.Price / 100, // Из копеек в рубли

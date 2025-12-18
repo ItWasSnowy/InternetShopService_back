@@ -20,7 +20,7 @@ public class DiscountDto
 {
     public Guid Id { get; set; }
     public Guid? NomenclatureGroupId { get; set; }
-    public Guid? NomenclatureId { get; set; }
+    public int? NomenclatureId { get; set; }
     public decimal DiscountPercent { get; set; }
     public DateTime ValidFrom { get; set; }
     public DateTime? ValidTo { get; set; }

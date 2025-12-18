@@ -498,7 +498,9 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
                 NomenclatureGroupId = rule.NomenclatureGroupId > 0 
                     ? ConvertInt32ToGuid(rule.NomenclatureGroupId) 
                     : null,
-                NomenclatureId = null, // Скидка на группу, не на конкретную позицию
+                NomenclatureId = rule.HasNomenclatureId && rule.NomenclatureId > 0 
+                    ? rule.NomenclatureId 
+                    : null, // null если скидка на группу, иначе ID конкретного товара
                 DiscountPercent = (decimal)rule.DiscountPercent,
                 ValidFrom = validFrom,
                 ValidTo = validTo,

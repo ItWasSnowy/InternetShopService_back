@@ -37,7 +37,7 @@ public class OrderStatusHistoryDto
 public class OrderItemDto
 {
     public Guid Id { get; set; }
-    public Guid NomenclatureId { get; set; }
+    public int NomenclatureId { get; set; }
     public string NomenclatureName { get; set; } = string.Empty;
     public int Quantity { get; set; }
     public decimal Price { get; set; }
@@ -83,7 +83,7 @@ public class CreateOrderDto
 
 public class CreateOrderItemDto
 {
-    public Guid NomenclatureId { get; set; }
+    public int NomenclatureId { get; set; }
     public string NomenclatureName { get; set; } = string.Empty;
     public int Quantity { get; set; }
     public decimal Price { get; set; }

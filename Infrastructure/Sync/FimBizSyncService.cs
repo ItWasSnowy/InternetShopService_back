@@ -630,8 +630,8 @@ public class FimBizSyncService : BackgroundService
                 Guid? nomenclatureGroupIdGuid = rule.NomenclatureGroupId > 0
                     ? ConvertInt32ToGuid(rule.NomenclatureGroupId)
                     : null;
-                Guid? nomenclatureIdGuid = rule.HasNomenclatureId && rule.NomenclatureId > 0
-                    ? ConvertInt32ToGuid(rule.NomenclatureId)
+                int? nomenclatureIdInt = rule.HasNomenclatureId && rule.NomenclatureId > 0
+                    ? rule.NomenclatureId
                     : null;
 
                 var discount = new Discount
@@ -639,7 +639,7 @@ public class FimBizSyncService : BackgroundService
                     Id = Guid.NewGuid(),
                     CounterpartyId = counterparty.Id,
                     NomenclatureGroupId = nomenclatureGroupIdGuid,
-                    NomenclatureId = nomenclatureIdGuid,
+                    NomenclatureId = nomenclatureIdInt,
                     DiscountPercent = (decimal)rule.DiscountPercent,
                     ValidFrom = validFrom,
                     ValidTo = validTo,
@@ -658,13 +658,13 @@ public class FimBizSyncService : BackgroundService
                 _logger.LogInformation(
                     "Добавлена скидка ID={DiscountId}, Percent={Percent}%, " +
                     "NomenclatureGroupId: FimBiz={GroupIdFimBiz}, Guid={GroupIdGuid}, " +
-                    "NomenclatureId: FimBiz={NomenclatureIdFimBiz}, Guid={NomenclatureIdGuid} " +
+                    "NomenclatureId: FimBiz={NomenclatureIdFimBiz}, int={NomenclatureIdInt} " +
                     "для контрагента {ContractorId}",
                     rule.Id, rule.DiscountPercent, 
                     rule.NomenclatureGroupId > 0 ? rule.NomenclatureGroupId.ToString() : "null",
                     nomenclatureGroupIdGuid?.ToString() ?? "null",
                     rule.HasNomenclatureId && rule.NomenclatureId > 0 ? rule.NomenclatureId.ToString() : "null",
-                    nomenclatureIdGuid?.ToString() ?? "null",
+                    nomenclatureIdInt?.ToString() ?? "null",
                     contractor.ContractorId);
             }
             catch (Exception ex)
@@ -1040,8 +1040,8 @@ public class FimBizSyncService : BackgroundService
                     Id = Guid.NewGuid(),
                     OrderId = order.Id,
                     NomenclatureId = grpcItem.HasNomenclatureId && grpcItem.NomenclatureId > 0
-                        ? ConvertInt32ToGuid(grpcItem.NomenclatureId)
-                        : Guid.NewGuid(), // Генерируем новый GUID если нет NomenclatureId
+                        ? grpcItem.NomenclatureId
+                        : 0, // 0 если нет NomenclatureId (но лучше не использовать такие записи)
                     NomenclatureName = grpcItem.Name,
                     Quantity = grpcItem.Quantity,
                     Price = (decimal)grpcItem.Price / 100, // Из копеек в рубли
