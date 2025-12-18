@@ -575,8 +575,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                         || request.BillInfo != null
                         || request.UpdInfo != null;
                     
-                    // Специальная обработка для Cancelled статуса: даже если статус уже установлен, но нет других изменений,
-                    // мы все равно должны убедиться что все поля обновлены
+                    // Специальная обработка для Cancelled статуса: всегда обновляем статус Cancelled, даже если он уже установлен
+                    // Это важно для синхронизации - если заказ был отменен в FimBiz, мы должны обновить его у нас
                     if (reloadedIsDuplicate && !reloadedHasOtherChanges && !reloadedStatusChanged && newStatus != OrderStatus.Cancelled)
                     {
                         _logger.LogInformation("=== [DUPLICATE NOTIFICATION] Дублирующее уведомление для заказа {OrderId} пропущено после перезагрузки ===", orderId);
