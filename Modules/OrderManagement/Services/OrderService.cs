@@ -687,17 +687,32 @@ public class OrderService : IOrderService
         // Объявляем вне try блока, чтобы использовать в catch
         string externalOrderId;
         
-        // Определяем ExternalOrderId:
-        // Если есть FimBizOrderId, используем "FIMBIZ-{FimBizOrderId}" (заказ был создан в FimBiz или синхронизирован)
-        // Иначе используем наш Guid (заказ создан у нас и еще не синхронизирован)
+        // Логика определения ExternalOrderId:
+        // - Если заказ создан в FimBiz → ExternalOrderId = "FIMBIZ-{FimBizOrderId}"
+        // - Если заказ создан у нас → ExternalOrderId = наш Guid (строка)
+        //
+        // ВАЖНО: Когда заказ создается у нас и отправляется в FimBiz через SendOrderToFimBizAsync,
+        // используется ExternalOrderId = order.Id.ToString() (Guid в виде строки).
+        // После синхронизации у заказа будет FimBizOrderId, но при обновлении статуса нужно использовать
+        // тот же ExternalOrderId, что и при создании (Guid).
+        //
+        // Проблема: как различить заказ, созданный в FimBiz, от заказа, созданного у нас и синхронизированного?
+        // Оба будут иметь FimBizOrderId.
+        //
+        // ВРЕМЕННОЕ РЕШЕНИЕ: Используем простую логику на основе наличия FimBizOrderId.
+        // Если FimBizOrderId есть, считаем заказ созданным в FimBiz.
+        // Это может быть неверно для заказов, созданных у нас и синхронизированных.
+        // 
+        // TODO: Добавить поле IsCreatedInFimBiz в модель Order для точного определения источника заказа.
+        
         if (order.FimBizOrderId.HasValue)
         {
-            // Заказ был создан в FimBiz или синхронизирован - используем "FIMBIZ-{FimBizOrderId}"
+            // Заказ создан в FimBiz - используем "FIMBIZ-{FimBizOrderId}"
             externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
         }
         else
         {
-            // Заказ создан у нас - ExternalOrderId это наш Guid
+            // Заказ создан у нас - ExternalOrderId это наш Guid (строка)
             externalOrderId = order.Id.ToString();
         }
         
