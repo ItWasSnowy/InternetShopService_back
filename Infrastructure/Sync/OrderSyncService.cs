@@ -261,32 +261,64 @@ public class OrderSyncService : BackgroundService
 
                 if (item.NomenclatureId != Guid.Empty)
                 {
-                    // Берем последние 4 байта Guid для конвертации в int32
-                    // Это нужно, потому что в FimBiz NomenclatureId хранится как int32,
-                    // а мы используем Guid, где число хранится в последних байтах
-                    // Например: "00000000-0000-0000-0000-000000000167" -> 167 (hex) = 359 (decimal)
-                    var bytes = item.NomenclatureId.ToByteArray();
-                    // Берем последние 4 байта (индексы 12-15)
-                    var nomenclatureIdInt32 = BitConverter.ToInt32(bytes, 12);
+                    // Извлекаем число из Guid для FimBiz
+                    // Guid формат: "00000000-0000-0000-0000-000000000167"
+                    // Реальный ID номенклатуры в FimBiz хранится в последней части Guid после последнего дефиса
+                    // Например: "00000000-0000-0000-0000-000000000167" -> извлекаем "000000000167" -> убираем нули -> "167"
+                    var guidString = item.NomenclatureId.ToString();
+                    var parts = guidString.Split('-');
                     
-                    // Проверяем, что получилось валидное значение
-                    if (nomenclatureIdInt32 != 0)
+                    if (parts.Length == 5)
                     {
-                        grpcItem.NomenclatureId = nomenclatureIdInt32;
+                        // Берем последнюю часть Guid (после последнего дефиса)
+                        var lastPart = parts[4]; // "000000000167"
                         
-                        _logger.LogInformation("Конвертация NomenclatureId: Guid={Guid} -> int32={Int32}", 
-                            item.NomenclatureId, nomenclatureIdInt32);
+                        // Убираем незначащие нули и конвертируем в int32
+                        if (int.TryParse(lastPart.TrimStart('0'), out var nomenclatureIdInt32) && nomenclatureIdInt32 > 0)
+                        {
+                            grpcItem.NomenclatureId = nomenclatureIdInt32;
+                            
+                            _logger.LogInformation("Конвертация NomenclatureId: Guid={Guid} -> int32={Int32} (из последней части '{LastPart}')", 
+                                item.NomenclatureId, nomenclatureIdInt32, lastPart);
+                        }
+                        else
+                        {
+                            // Если не удалось распарсить, пробуем как hex
+                            if (int.TryParse(lastPart, System.Globalization.NumberStyles.HexNumber, null, out var hexValue) && hexValue > 0)
+                            {
+                                grpcItem.NomenclatureId = hexValue;
+                                _logger.LogInformation("Конвертация NomenclatureId (hex): Guid={Guid} -> int32={Int32} (из последней части '{LastPart}')", 
+                                    item.NomenclatureId, hexValue, lastPart);
+                            }
+                            else
+                            {
+                                _logger.LogWarning("Не удалось извлечь NomenclatureId из Guid. Guid={Guid}, LastPart={LastPart}. Поле не будет отправлено в FimBiz", 
+                                    item.NomenclatureId, lastPart);
+                            }
+                        }
                     }
                     else
                     {
-                        _logger.LogWarning("NomenclatureId конвертировался в 0. Guid={Guid}. Поле не будет отправлено в FimBiz", 
-                            item.NomenclatureId);
+                        _logger.LogWarning("Неверный формат Guid для NomenclatureId. Guid={Guid}, GuidString={GuidString}. Поле не будет отправлено в FimBiz", 
+                            item.NomenclatureId, guidString);
                     }
                 }
                 else
                 {
                     _logger.LogWarning("Позиция заказа имеет пустой NomenclatureId (Guid.Empty). Поле не будет отправлено в FimBiz. OrderId={OrderId}, ItemName={ItemName}", 
                         order.Id, item.NomenclatureName);
+                }
+
+                // Логируем финальное значение NomenclatureId, которое будет отправлено в FimBiz
+                if (grpcItem.HasNomenclatureId && grpcItem.NomenclatureId > 0)
+                {
+                    _logger.LogInformation("Отправка позиции в FimBiz: NomenclatureId={NomenclatureId}, Name={Name}, Quantity={Quantity}, Price={Price}", 
+                        grpcItem.NomenclatureId, grpcItem.Name, grpcItem.Quantity, grpcItem.Price);
+                }
+                else
+                {
+                    _logger.LogWarning("Позиция заказа отправляется в FimBiz без NomenclatureId: Name={Name}, Quantity={Quantity}, Price={Price}", 
+                        grpcItem.Name, grpcItem.Quantity, grpcItem.Price);
                 }
 
                 createOrderRequest.Items.Add(grpcItem);
