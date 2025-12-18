@@ -116,12 +116,33 @@ public class FimBizSyncService : BackgroundService
                 var response = await grpcClient.GetContractorsAsync(request);
                 
                 int shopSyncedCount = 0;
-                foreach (var contractor in response.Contractors)
+                foreach (var contractorSummary in response.Contractors)
                 {
                     if (cancellationToken.IsCancellationRequested)
                         break;
 
-                    await SyncContractorAsync(contractor, counterpartyRepository, dbContext, cancellationToken);
+                    // Логируем количество DiscountRules в базовом ответе GetContractors
+                    // Согласно прото файлу FimBiz, GetContractors может не возвращать полные данные
+                    _logger.LogDebug("Базовые данные контрагента {ContractorId} из GetContractors: DiscountRules.Count = {Count}", 
+                        contractorSummary.ContractorId, contractorSummary.DiscountRules?.Count ?? 0);
+
+                    // Получаем полные данные контрагента со скидками через GetContractor (rpc GetContractor)
+                    // Это гарантирует получение всех discount_rules согласно прото файлу FimBiz
+                    var fullContractor = await grpcClient.GetContractorGrpcAsync(contractorSummary.ContractorId);
+                    if (fullContractor != null)
+                    {
+                        _logger.LogInformation("Полные данные контрагента {ContractorId} из GetContractor: DiscountRules.Count = {Count}", 
+                            fullContractor.ContractorId, fullContractor.DiscountRules?.Count ?? 0);
+                        
+                        // SyncContractorAsync принимает Contractor из gRPC (тип из прото файла)
+                        await SyncContractorAsync(fullContractor, counterpartyRepository, dbContext, cancellationToken);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Не удалось получить полные данные контрагента {ContractorId} через GetContractor, используем базовые данные из GetContractors", 
+                            contractorSummary.ContractorId);
+                        await SyncContractorAsync(contractorSummary, counterpartyRepository, dbContext, cancellationToken);
+                    }
                     shopSyncedCount++;
                 }
 
@@ -278,6 +299,28 @@ public class FimBizSyncService : BackgroundService
             {
                 _logger.LogWarning("Получено изменение контрагента без данных контрагента. ChangeType={ChangeType}", change.ChangeType);
                 return;
+            }
+            
+            // Логируем количество DiscountRules в изменении из стрима SubscribeToChanges
+            // Согласно прото файлу FimBiz, ContractorChange содержит Contractor с discount_rules
+            _logger.LogInformation("Изменение контрагента {ContractorId} из стрима: DiscountRules.Count = {Count}", 
+                contractor.ContractorId, contractor.DiscountRules?.Count ?? 0);
+
+            // Получаем полные данные контрагента со скидками через GetContractor для гарантии
+            // Это важно, так как стрим может передавать неполные данные для оптимизации
+            using var scope = _serviceProvider.CreateScope();
+            var grpcClient = scope.ServiceProvider.GetRequiredService<IFimBizGrpcClient>();
+            var fullContractor = await grpcClient.GetContractorGrpcAsync(contractor.ContractorId);
+            if (fullContractor != null)
+            {
+                _logger.LogInformation("Полные данные контрагента {ContractorId} из GetContractor: DiscountRules.Count = {Count}", 
+                    fullContractor.ContractorId, fullContractor.DiscountRules?.Count ?? 0);
+                contractor = fullContractor; // Используем полные данные со скидками
+            }
+            else
+            {
+                _logger.LogWarning("Не удалось получить полные данные контрагента {ContractorId} из GetContractor, используем данные из стрима SubscribeToChanges", 
+                    contractor.ContractorId);
             }
             
             // Если флаг is_create_cabinet = false, не синхронизируем контрагента (если его еще нет в БД)
@@ -513,9 +556,22 @@ public class FimBizSyncService : BackgroundService
         CancellationToken cancellationToken)
     {
         // Логируем количество полученных скидок
+        _logger.LogInformation("=== [DISCOUNT SYNC] Начало синхронизации скидок ===");
+        _logger.LogInformation("ContractorId (local): {LocalId}, FimBizContractorId: {FimBizId}", 
+            counterparty.Id, contractor.ContractorId);
         _logger.LogInformation(
             "Синхронизация скидок для контрагента {ContractorId} (FimBiz ID: {FimBizContractorId}). Получено DiscountRules: {Count}",
             counterparty.Id, contractor.ContractorId, contractor.DiscountRules.Count);
+
+        // Логируем каждую DiscountRule с деталями
+        for (int i = 0; i < contractor.DiscountRules.Count; i++)
+        {
+            var rule = contractor.DiscountRules[i];
+            _logger.LogInformation("DiscountRule[{Index}]: ID={Id}, Name={Name}, Percent={Percent}%, IsActive={IsActive}, GroupId={GroupId}, NomenclatureId={NomenclatureId}",
+                i, rule.Id, rule.Name ?? "null", rule.DiscountPercent, rule.IsActive,
+                rule.NomenclatureGroupId > 0 ? rule.NomenclatureGroupId.ToString() : "null",
+                rule.HasNomenclatureId && rule.NomenclatureId > 0 ? rule.NomenclatureId.ToString() : "null");
+        }
 
         // Удаляем старые скидки для этого контрагента
         var oldDiscounts = await dbContext.Discounts

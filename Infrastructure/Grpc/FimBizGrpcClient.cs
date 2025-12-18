@@ -221,6 +221,48 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
         }
     }
 
+    public async Task<Contractor?> GetContractorGrpcAsync(int fimBizContractorId)
+    {
+        try
+        {
+            var request = new GetContractorRequest
+            {
+                ContractorId = fimBizContractorId
+            };
+
+            var headers = CreateHeaders();
+            var contractor = await _contractorClient.GetContractorAsync(request, headers);
+            
+            // Логируем количество DiscountRules согласно прото файлу FimBiz (поле 28)
+            _logger.LogInformation("Получен контрагент {ContractorId} из FimBiz через GetContractor. DiscountRules.Count = {Count}", 
+                fimBizContractorId, contractor?.DiscountRules?.Count ?? 0);
+            
+            return contractor;
+        }
+        catch (RpcException ex)
+        {
+            if (ex.StatusCode == StatusCode.NotFound)
+            {
+                _logger.LogWarning("Контрагент с FimBiz ID {FimBizContractorId} не найден", fimBizContractorId);
+                return null;
+            }
+
+            _logger.LogError(ex, "Ошибка gRPC при получении контрагента по FimBiz ID {FimBizContractorId}", fimBizContractorId);
+            
+            if (ex.StatusCode == StatusCode.Unauthenticated)
+            {
+                throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");
+            }
+            
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при получении контрагента по FimBiz ID {FimBizContractorId}", fimBizContractorId);
+            return null;
+        }
+    }
+
     public AsyncServerStreamingCall<ContractorChange> SubscribeToChanges(SubscribeRequest request)
     {
         var headers = CreateHeaders();
