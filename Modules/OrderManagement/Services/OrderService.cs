@@ -683,6 +683,24 @@ public class OrderService : IOrderService
 
     private async Task<bool> SendOrderStatusUpdateToFimBizAsync(LocalOrder order, OrderStatus newStatus)
     {
+        // Определяем правильный ExternalOrderId в зависимости от того, где был создан заказ
+        // Объявляем вне try блока, чтобы использовать в catch
+        string externalOrderId;
+        
+        // Определяем ExternalOrderId:
+        // Если есть FimBizOrderId, используем "FIMBIZ-{FimBizOrderId}" (заказ был создан в FimBiz или синхронизирован)
+        // Иначе используем наш Guid (заказ создан у нас и еще не синхронизирован)
+        if (order.FimBizOrderId.HasValue)
+        {
+            // Заказ был создан в FimBiz или синхронизирован - используем "FIMBIZ-{FimBizOrderId}"
+            externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
+        }
+        else
+        {
+            // Заказ создан у нас - ExternalOrderId это наш Guid
+            externalOrderId = order.Id.ToString();
+        }
+        
         try
         {
             // Получаем магазин для company_id
@@ -702,30 +720,21 @@ public class OrderService : IOrderService
 
             // Преобразуем статус из нашей модели в gRPC
             var grpcStatus = MapToGrpcOrderStatus(newStatus);
-
-            // Определяем правильный ExternalOrderId в зависимости от того, где был создан заказ
-            // Сначала определяем ExternalOrderId, затем проверяем его формат
-            string externalOrderId;
-            
-            // Определяем ExternalOrderId: если OrderNumber начинается с "FIMBIZ-", используем его, иначе используем наш Guid
-            if (!string.IsNullOrEmpty(order.OrderNumber) && 
-                order.OrderNumber.StartsWith("FIMBIZ-", StringComparison.OrdinalIgnoreCase))
-            {
-                // Заказ создан в FimBiz - ExternalOrderId имеет формат "FIMBIZ-{orderId}"
-                externalOrderId = order.OrderNumber;
-            }
-            else
-            {
-                // Заказ создан у нас - ExternalOrderId это наш Guid
-                externalOrderId = order.Id.ToString();
-            }
             
             // Проверяем формат ExternalOrderId для определения источника заказа
             bool isCreatedInFimBiz = externalOrderId.StartsWith("FIMBIZ-", StringComparison.OrdinalIgnoreCase);
             
+            // Если заказ создан у нас и нет FimBizOrderId, значит заказ еще не был отправлен в FimBiz
+            // В этом случае не нужно пытаться обновлять статус в FimBiz
+            if (!isCreatedInFimBiz && !order.FimBizOrderId.HasValue)
+            {
+                _logger.LogInformation("=== [STATUS SYNC] Заказ {OrderId} создан у нас, но еще не был отправлен в FimBiz (нет FimBizOrderId). Пропускаем синхронизацию статуса ===", order.Id);
+                return false;
+            }
+            
             if (isCreatedInFimBiz)
             {
-                _logger.LogInformation("=== [STATUS SYNC] Заказ создан в FimBiz, используем ExternalOrderId: {ExternalOrderId} ===", externalOrderId);
+                _logger.LogInformation("=== [STATUS SYNC] Заказ синхронизирован с FimBiz, используем ExternalOrderId: {ExternalOrderId} ===", externalOrderId);
             }
             else
             {
@@ -776,6 +785,14 @@ public class OrderService : IOrderService
         }
         catch (Grpc.Core.RpcException ex)
         {
+            // Если заказ не найден в FimBiz, это нормально для заказов, которые еще не были отправлены
+            if (ex.StatusCode == Grpc.Core.StatusCode.NotFound)
+            {
+                _logger.LogInformation("=== [STATUS SYNC] Заказ {OrderId} не найден в FimBiz. Это нормально, если заказ еще не был отправлен. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId} ===", 
+                    order.Id, externalOrderId, order.FimBizOrderId?.ToString() ?? "отсутствует");
+                return false; // Не считаем это ошибкой
+            }
+            
             if (newStatus == OrderStatus.Cancelled)
             {
                 _logger.LogError(ex, "=== [CANCELLED STATUS SYNC] Ошибка gRPC при отправке статуса Cancelled для заказа {OrderId} в FimBiz ===", order.Id);
