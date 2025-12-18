@@ -1165,84 +1165,35 @@ public class OrderService : IOrderService
         }
 
         var oldStatus = order.Status;
+        
+        // Обновляем статус заказа
+        order.Status = OrderStatus.Cancelled;
+        order.UpdatedAt = DateTime.UtcNow;
 
-        try
+        // Добавляем запись в историю статусов
+        var statusHistory = new OrderStatusHistory
         {
-            // Обновляем только нужные поля через Entry API, чтобы избежать конфликтов с навигационными свойствами
-            var entry = _context.Entry(order);
-            entry.Property(o => o.Status).CurrentValue = OrderStatus.Cancelled;
-            entry.Property(o => o.UpdatedAt).CurrentValue = DateTime.UtcNow;
-            entry.Property(o => o.Status).IsModified = true;
-            entry.Property(o => o.UpdatedAt).IsModified = true;
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            Status = OrderStatus.Cancelled,
+            ChangedAt = DateTime.UtcNow,
+            Comment = !string.IsNullOrEmpty(reason) ? $"Отменен пользователем. Причина: {reason}" : "Отменен пользователем"
+        };
+        order.StatusHistory.Add(statusHistory);
 
-            // Добавляем запись в историю статусов напрямую в контекст
-            var statusHistory = new OrderStatusHistory
-            {
-                Id = Guid.NewGuid(),
-                OrderId = order.Id,
-                Status = OrderStatus.Cancelled,
-                ChangedAt = DateTime.UtcNow,
-                Comment = !string.IsNullOrEmpty(reason) ? $"Отменен пользователем. Причина: {reason}" : "Отменен пользователем"
-            };
-            _context.OrderStatusHistories.Add(statusHistory);
-
-            // Сохраняем изменения
-            await _context.SaveChangesAsync();
-
-            // Обновляем локальный объект для дальнейшего использования
-            order.Status = OrderStatus.Cancelled;
-            order.UpdatedAt = DateTime.UtcNow;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Ошибка при обновлении заказа {OrderId} при отмене. Детали: {Message}", orderId, ex.Message);
-            throw new InvalidOperationException("Не удалось отменить заказ. Ошибка при сохранении изменений.", ex);
-        }
+        // Сохраняем изменения через репозиторий (как в других методах)
+        order = await _orderRepository.UpdateAsync(order);
 
         _logger.LogInformation("Заказ {OrderId} отменен пользователем {UserId}. Статус изменен с {OldStatus} на {NewStatus}. Причина: {Reason}", 
             orderId, userId, oldStatus, OrderStatus.Cancelled, reason ?? "не указана");
 
-        // Перезагружаем заказ из БД, чтобы получить актуальный FimBizOrderId
-        _logger.LogInformation("=== [CANCEL ORDER] Перезагрузка заказа {OrderId} для проверки синхронизации с FimBiz ===", orderId);
-        var updatedOrder = await _orderRepository.GetByIdAsync(orderId);
-        if (updatedOrder == null)
+        // Если заказ синхронизирован с FimBiz, отправляем обновление статуса (без перезагрузки)
+        if (order.FimBizOrderId.HasValue)
         {
-            _logger.LogWarning("=== [CANCEL ORDER] Не удалось перезагрузить заказ {OrderId} после отмены для проверки FimBizOrderId ===", orderId);
-        }
-        else
-        {
-            _logger.LogInformation("=== [CANCEL ORDER] Заказ {OrderId} перезагружен. FimBizOrderId: {FimBizOrderId}, Status: {Status}, OrderNumber: {OrderNumber} ===", 
-                orderId, updatedOrder.FimBizOrderId?.ToString() ?? "отсутствует", updatedOrder.Status, updatedOrder.OrderNumber ?? "не указан");
-            
-            // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
-            if (updatedOrder.FimBizOrderId.HasValue)
+            var syncSuccess = await SendOrderStatusUpdateToFimBizAsync(order, OrderStatus.Cancelled);
+            if (!syncSuccess)
             {
-                _logger.LogInformation("=== [CANCEL ORDER] Отправка статуса отмены в FimBiz ===");
-                _logger.LogInformation("Заказ {OrderId} имеет FimBizOrderId: {FimBizOrderId}. Отправка обновления статуса в FimBiz", 
-                    orderId, updatedOrder.FimBizOrderId.Value);
-                
-                try
-                {
-                    var syncSuccess = await SendOrderStatusUpdateToFimBizAsync(updatedOrder, OrderStatus.Cancelled);
-                    
-                    if (syncSuccess)
-                    {
-                        _logger.LogInformation("=== [CANCEL ORDER] Статус отмены успешно отправлен в FimBiz для заказа {OrderId} ===", orderId);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("=== [CANCEL ORDER] Не удалось отправить статус отмены в FimBiz для заказа {OrderId}. Заказ отменен локально, но FimBiz может не знать об отмене ===", orderId);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "=== [CANCEL ORDER] Исключение при отправке обновления статуса отмены заказа {OrderId} в FimBiz ===", orderId);
-                    // Не прерываем выполнение, заказ уже отменен локально
-                }
-            }
-            else
-            {
-                _logger.LogWarning("=== [CANCEL ORDER] Заказ {OrderId} не синхронизирован с FimBiz (FimBizOrderId отсутствует). Обновление статуса в FimBiz не требуется. Заказ был создан локально, но не был отправлен в FimBiz или синхронизация не завершилась ===", orderId);
+                _logger.LogWarning("Не удалось отправить обновление статуса заказа {OrderId} в FimBiz, но заказ обновлен локально", order.Id);
             }
         }
 
@@ -1273,28 +1224,7 @@ public class OrderService : IOrderService
             // Не прерываем выполнение при ошибке отправки уведомления
         }
 
-        // Перезагружаем заказ с навигационными свойствами для корректного маппинга в DTO
-        // Используем уже загруженный updatedOrder, если он есть, иначе загружаем заново
-        try
-        {
-            var orderForDto = updatedOrder ?? await _orderRepository.GetByIdAsync(orderId);
-            if (orderForDto == null)
-            {
-                _logger.LogError("Заказ {OrderId} не найден после отмены", orderId);
-                throw new InvalidOperationException("Ошибка при получении обновленного заказа");
-            }
-
-            return await MapToOrderDtoAsync(orderForDto);
-        }
-        catch (InvalidOperationException)
-        {
-            // Пробрасываем InvalidOperationException дальше
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Ошибка при получении или маппинге заказа {OrderId} после отмены", orderId);
-            throw new InvalidOperationException("Ошибка при получении данных об отмененном заказе", ex);
-        }
+        // Возвращаем DTO (используем объект order после UpdateAsync, как в других методах)
+        return await MapToOrderDtoAsync(order);
     }
 }
