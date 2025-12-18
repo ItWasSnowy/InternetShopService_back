@@ -627,10 +627,10 @@ public class FimBizSyncService : BackgroundService
 
             try
             {
-                var nomenclatureGroupIdGuid = rule.NomenclatureGroupId > 0
+                Guid? nomenclatureGroupIdGuid = rule.NomenclatureGroupId > 0
                     ? ConvertInt32ToGuid(rule.NomenclatureGroupId)
                     : null;
-                var nomenclatureIdGuid = rule.HasNomenclatureId && rule.NomenclatureId > 0
+                Guid? nomenclatureIdGuid = rule.HasNomenclatureId && rule.NomenclatureId > 0
                     ? ConvertInt32ToGuid(rule.NomenclatureId)
                     : null;
 
