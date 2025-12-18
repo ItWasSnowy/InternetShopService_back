@@ -601,19 +601,22 @@ public class FimBizSyncService : BackgroundService
                 continue;
             }
 
+            // Если HasValidFrom=False, это означает бессрочную скидку (действует с начала времен)
+            // Если HasValidTo=False, это означает бессрочную скидку (без даты окончания)
             var validFrom = rule.HasValidFrom && rule.ValidFrom > 0
                 ? DateTimeOffset.FromUnixTimeSeconds(rule.ValidFrom).UtcDateTime
-                : DateTime.UtcNow;
+                : DateTime.MinValue; // Бессрочная скидка - действует с начала времен
 
             var validTo = rule.HasValidTo && rule.ValidTo > 0
                 ? DateTimeOffset.FromUnixTimeSeconds(rule.ValidTo).UtcDateTime
-                : (DateTime?)null;
+                : (DateTime?)null; // Бессрочная скидка - без даты окончания
 
             // Логируем даты для диагностики
             _logger.LogInformation("Обработка скидки ID={DiscountId}: HasValidFrom={HasValidFrom}, ValidFrom={ValidFrom}, HasValidTo={HasValidTo}, ValidTo={ValidTo}, Now={Now}",
                 rule.Id, rule.HasValidFrom, validFrom, rule.HasValidTo, validTo?.ToString() ?? "null", now);
 
             // Проверяем, что скидка еще действительна
+            // Для бессрочных скидок (validFrom = DateTime.MinValue и validTo = null) проверка всегда проходит
             if (validFrom > now || (validTo.HasValue && validTo.Value < now))
             {
                 _logger.LogInformation("Пропущена скидка ID={DiscountId} (недействительна по датам) для контрагента {ContractorId}. ValidFrom={ValidFrom}, ValidTo={ValidTo}, Now={Now}",
