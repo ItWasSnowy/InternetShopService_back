@@ -497,6 +497,11 @@ public class FimBizSyncService : BackgroundService
                 contractor.ContractorId);
         }
 
+        // Логируем информацию о DiscountRules перед синхронизацией
+        _logger.LogInformation(
+            "Контрагент {ContractorId}: DiscountRules.Count = {Count}",
+            contractor.ContractorId, contractor.DiscountRules?.Count ?? 0);
+
         // Синхронизируем скидки
         await SyncDiscountsAsync(contractor, counterparty, dbContext, cancellationToken);
     }
@@ -507,6 +512,11 @@ public class FimBizSyncService : BackgroundService
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        // Логируем количество полученных скидок
+        _logger.LogInformation(
+            "Синхронизация скидок для контрагента {ContractorId} (FimBiz ID: {FimBizContractorId}). Получено DiscountRules: {Count}",
+            counterparty.Id, contractor.ContractorId, contractor.DiscountRules.Count);
+
         // Удаляем старые скидки для этого контрагента
         var oldDiscounts = await dbContext.Discounts
             .Where(d => d.CounterpartyId == counterparty.Id)
@@ -514,13 +524,27 @@ public class FimBizSyncService : BackgroundService
         
         if (oldDiscounts.Any())
         {
+            _logger.LogInformation("Удаление {Count} старых скидок для контрагента {ContractorId}", 
+                oldDiscounts.Count, counterparty.Id);
             dbContext.Discounts.RemoveRange(oldDiscounts);
         }
 
         // Добавляем новые скидки
         var now = DateTime.UtcNow;
-        foreach (var rule in contractor.DiscountRules.Where(r => r.IsActive))
+        int addedCount = 0;
+        int skippedCount = 0;
+        
+        foreach (var rule in contractor.DiscountRules)
         {
+            // Логируем все правила, даже неактивные
+            if (!rule.IsActive)
+            {
+                _logger.LogDebug("Пропущена неактивная скидка ID={DiscountId}, Name={Name} для контрагента {ContractorId}",
+                    rule.Id, rule.Name ?? "без названия", contractor.ContractorId);
+                skippedCount++;
+                continue;
+            }
+
             var validFrom = rule.HasValidFrom && rule.ValidFrom > 0
                 ? DateTimeOffset.FromUnixTimeSeconds(rule.ValidFrom).UtcDateTime
                 : DateTime.UtcNow;
@@ -531,34 +555,59 @@ public class FimBizSyncService : BackgroundService
 
             // Проверяем, что скидка еще действительна
             if (validFrom > now || (validTo.HasValue && validTo.Value < now))
-                continue;
-
-            var discount = new Discount
             {
-                Id = Guid.NewGuid(),
-                CounterpartyId = counterparty.Id,
-                NomenclatureGroupId = rule.NomenclatureGroupId > 0
-                    ? Guid.Parse(rule.NomenclatureGroupId.ToString())
-                    : null,
-                NomenclatureId = rule.HasNomenclatureId && rule.NomenclatureId > 0
-                    ? Guid.Parse(rule.NomenclatureId.ToString())
-                    : null,
-                DiscountPercent = (decimal)rule.DiscountPercent,
-                ValidFrom = validFrom,
-                ValidTo = validTo,
-                IsActive = true,
-                CreatedAt = rule.DateCreate > 0 
-                    ? DateTimeOffset.FromUnixTimeSeconds(rule.DateCreate).UtcDateTime 
-                    : DateTime.UtcNow,
-                UpdatedAt = rule.DateUpdate > 0 
-                    ? DateTimeOffset.FromUnixTimeSeconds(rule.DateUpdate).UtcDateTime 
-                    : DateTime.UtcNow
-            };
+                _logger.LogDebug("Пропущена скидка ID={DiscountId} (недействительна по датам) для контрагента {ContractorId}. ValidFrom={ValidFrom}, ValidTo={ValidTo}, Now={Now}",
+                    rule.Id, contractor.ContractorId, validFrom, validTo?.ToString() ?? "null", now);
+                skippedCount++;
+                continue;
+            }
 
-            dbContext.Discounts.Add(discount);
+            try
+            {
+                var discount = new Discount
+                {
+                    Id = Guid.NewGuid(),
+                    CounterpartyId = counterparty.Id,
+                    NomenclatureGroupId = rule.NomenclatureGroupId > 0
+                        ? ConvertInt32ToGuid(rule.NomenclatureGroupId)  // Исправлено: используем правильный метод
+                        : null,
+                    NomenclatureId = rule.HasNomenclatureId && rule.NomenclatureId > 0
+                        ? ConvertInt32ToGuid(rule.NomenclatureId)  // Исправлено: используем правильный метод
+                        : null,
+                    DiscountPercent = (decimal)rule.DiscountPercent,
+                    ValidFrom = validFrom,
+                    ValidTo = validTo,
+                    IsActive = true,
+                    CreatedAt = rule.DateCreate > 0 
+                        ? DateTimeOffset.FromUnixTimeSeconds(rule.DateCreate).UtcDateTime 
+                        : DateTime.UtcNow,
+                    UpdatedAt = rule.DateUpdate > 0 
+                        ? DateTimeOffset.FromUnixTimeSeconds(rule.DateUpdate).UtcDateTime 
+                        : DateTime.UtcNow
+                };
+
+                dbContext.Discounts.Add(discount);
+                addedCount++;
+                
+                _logger.LogDebug("Добавлена скидка ID={DiscountId}, Percent={Percent}%, NomenclatureGroupId={GroupId}, NomenclatureId={NomenclatureId} для контрагента {ContractorId}",
+                    rule.Id, rule.DiscountPercent, 
+                    rule.NomenclatureGroupId > 0 ? rule.NomenclatureGroupId.ToString() : "null",
+                    rule.HasNomenclatureId && rule.NomenclatureId > 0 ? rule.NomenclatureId.ToString() : "null",
+                    contractor.ContractorId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при обработке скидки ID={DiscountId} для контрагента {ContractorId}", 
+                    rule.Id, contractor.ContractorId);
+                skippedCount++;
+            }
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        
+        _logger.LogInformation(
+            "Синхронизация скидок завершена для контрагента {ContractorId}. Добавлено: {AddedCount}, Пропущено: {SkippedCount}",
+            counterparty.Id, addedCount, skippedCount);
     }
 
     private async Task DeleteContractorAsync(
