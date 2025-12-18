@@ -128,7 +128,52 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             {
                 // Стандартный формат - Guid (заказ создан в интернет-магазине)
                 orderId = parsedGuid;
+                _logger.LogInformation("=== [ORDER STATUS CHANGE] Поиск заказа по ExternalOrderId (Guid): {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, NewStatus: {NewStatus} ===", 
+                    request.ExternalOrderId, request.FimBizOrderId, request.NewStatus);
                 order = await _orderRepository.GetByIdAsync(orderId);
+                
+                if (order != null)
+                {
+                    _logger.LogInformation("=== [ORDER STATUS CHANGE] Заказ найден по Guid. OrderId: {OrderId}, FimBizOrderId: {FimBizOrderId}, CurrentStatus: {CurrentStatus} ===", 
+                        order.Id, order.FimBizOrderId?.ToString() ?? "отсутствует", order.Status);
+                    
+                    // Проверяем, что FimBizOrderId совпадает (если он был передан)
+                    if (request.FimBizOrderId > 0 && order.FimBizOrderId.HasValue && order.FimBizOrderId.Value != request.FimBizOrderId)
+                    {
+                        _logger.LogWarning("=== [ORDER STATUS CHANGE] Несоответствие FimBizOrderId! Заказ найден по Guid, но FimBizOrderId не совпадает. Локальный: {LocalFimBizOrderId}, От FimBiz: {FimBizOrderId} ===", 
+                            order.FimBizOrderId.Value, request.FimBizOrderId);
+                        // Обновляем FimBizOrderId на значение от FimBiz
+                        order.FimBizOrderId = request.FimBizOrderId;
+                    }
+                    else if (request.FimBizOrderId > 0 && !order.FimBizOrderId.HasValue)
+                    {
+                        _logger.LogInformation("=== [ORDER STATUS CHANGE] Заказ найден по Guid, но FimBizOrderId отсутствовал. Устанавливаем FimBizOrderId: {FimBizOrderId} ===", 
+                            request.FimBizOrderId);
+                        order.FimBizOrderId = request.FimBizOrderId;
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("=== [ORDER STATUS CHANGE] Заказ не найден по Guid ExternalOrderId: {ExternalOrderId}. Попытка найти по FimBizOrderId: {FimBizOrderId} ===", 
+                        request.ExternalOrderId, request.FimBizOrderId);
+                    
+                    // Если заказ не найден по Guid, пробуем найти по FimBizOrderId
+                    if (request.FimBizOrderId > 0)
+                    {
+                        order = await _orderRepository.GetByFimBizOrderIdAsync(request.FimBizOrderId);
+                        if (order != null)
+                        {
+                            orderId = order.Id;
+                            _logger.LogInformation("=== [ORDER STATUS CHANGE] Заказ найден по FimBizOrderId: {FimBizOrderId}. OrderId: {OrderId}, CurrentStatus: {CurrentStatus} ===", 
+                                request.FimBizOrderId, order.Id, order.Status);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("=== [ORDER STATUS CHANGE] Заказ не найден ни по Guid ExternalOrderId: {ExternalOrderId}, ни по FimBizOrderId: {FimBizOrderId}. Возможно, заказ еще не был создан или был удален ===", 
+                                request.ExternalOrderId, request.FimBizOrderId);
+                        }
+                    }
+                }
             }
             else if (request.ExternalOrderId.StartsWith("FIMBIZ-", StringComparison.OrdinalIgnoreCase))
             {
@@ -353,10 +398,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             //     order.DriverId = await MapFimBizEmployeeIdToLocalGuid(request.DriverId);
             // }
 
-            // Проверяем, были ли реальные изменения
-            // ВАЖНО: Статус всегда обновляется, даже если он не изменился, т.к. это уведомление от FimBiz
-            bool hasChanges = oldStatus != newStatus
-                || oldTotalAmount != order.TotalAmount
+            // Проверяем, были ли реальные изменения (кроме статуса)
+            bool hasOtherChanges = oldTotalAmount != order.TotalAmount
                 || oldTrackingNumber != order.TrackingNumber
                 || oldIsPriority != order.IsPriority
                 || oldIsLongAssembling != order.IsLongAssembling
@@ -368,12 +411,38 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 || request.BillInfo != null
                 || request.UpdInfo != null;
 
-            // ВАЖНО: Всегда сохраняем изменения, даже если статус не изменился,
-            // т.к. это уведомление от FimBiz и мы должны синхронизировать данные
-            // if (!hasChanges) - УДАЛЕНО: всегда сохраняем изменения
-
-            // Добавляем запись в историю статусов только если статус изменился
-            if (oldStatus != newStatus)
+            // Дедупликация уведомлений: проверяем, не было ли уже обработано такое же уведомление
+            var statusChangedAt = request.StatusChangedAt > 0 
+                ? DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt).UtcDateTime 
+                : DateTime.UtcNow;
+            
+            bool isDuplicate = false;
+            
+            // Проверяем последнюю запись в истории статусов для этого заказа
+            // StatusHistory должен быть загружен через Include в GetByIdAsync/GetByFimBizOrderIdAsync
+            if (order.StatusHistory != null && order.StatusHistory.Any())
+            {
+                var lastStatusHistory = order.StatusHistory
+                    .Where(h => h.Status == newStatus)
+                    .OrderByDescending(h => h.ChangedAt)
+                    .FirstOrDefault();
+                
+                if (lastStatusHistory != null && oldStatus == newStatus)
+                {
+                    // Проверяем, не является ли это дубликатом по времени изменения статуса
+                    // Допускаем погрешность в 5 секунд для учета возможных расхождений во времени
+                    var timeDifference = Math.Abs((statusChangedAt - lastStatusHistory.ChangedAt).TotalSeconds);
+                    if (timeDifference < 5)
+                    {
+                        isDuplicate = true;
+                        _logger.LogInformation("=== [DUPLICATE NOTIFICATION] Обнаружено дублирующее уведомление для заказа {OrderId}. Статус: {Status}, StatusChangedAt: {StatusChangedAt}, Последняя запись: {LastChangedAt} ===", 
+                            orderId, newStatus, statusChangedAt, lastStatusHistory.ChangedAt);
+                    }
+                }
+            }
+            
+            // Добавляем запись в историю статусов только если статус изменился и это не дубликат
+            if (oldStatus != newStatus && !isDuplicate)
             {
                 var statusHistory = new OrderStatusHistory
                 {
@@ -381,24 +450,174 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     OrderId = order.Id,
                     Status = newStatus,
                     Comment = !string.IsNullOrEmpty(request.Comment) ? request.Comment : null,
-                    ChangedAt = request.StatusChangedAt > 0 
-                        ? DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt).UtcDateTime 
-                        : DateTime.UtcNow
+                    ChangedAt = statusChangedAt
                 };
                 order.StatusHistory.Add(statusHistory);
                 _logger.LogInformation("Добавлена запись в историю статусов для заказа {OrderId}: {OldStatus} -> {NewStatus}", 
                     orderId, oldStatus, newStatus);
             }
-            else
+            else if (oldStatus == newStatus && !isDuplicate)
             {
                 _logger.LogInformation("Статус заказа {OrderId} не изменился ({Status}), но другие поля могут быть обновлены", 
                     orderId, newStatus);
             }
+            else if (isDuplicate)
+            {
+                _logger.LogInformation("=== [DUPLICATE NOTIFICATION] Пропускаем добавление записи в историю статусов для заказа {OrderId}, так как это дубликат ===", orderId);
+            }
 
             order.SyncedWithFimBizAt = DateTime.UtcNow;
 
+            // Проверка статуса перед обновлением: если статус не изменился и нет других изменений, пропускаем обновление
+            // Если это дубликат и нет других изменений, возвращаем успешный ответ без обновления БД
+            if (isDuplicate && !hasOtherChanges && oldStatus == newStatus)
+            {
+                _logger.LogInformation("=== [DUPLICATE NOTIFICATION] Дублирующее уведомление для заказа {OrderId} пропущено. Статус не изменился и нет других изменений ===", orderId);
+                return new NotifyOrderStatusChangeResponse
+                {
+                    Success = true,
+                    Message = "Уведомление уже было обработано ранее (дубликат)"
+                };
+            }
+
             // Сохраняем изменения (ВСЕГДА сохраняем, даже если статус не изменился, т.к. могут быть другие изменения)
-            await _orderRepository.UpdateAsync(order);
+            // Обрабатываем DbUpdateConcurrencyException с повторной попыткой
+            const int maxRetries = 3;
+            int retryCount = 0;
+            bool updateSuccess = false;
+            
+            while (retryCount < maxRetries && !updateSuccess)
+            {
+                try
+                {
+                    await _orderRepository.UpdateAsync(order);
+                    updateSuccess = true;
+                }
+                catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
+                {
+                    retryCount++;
+                    _logger.LogWarning(ex, 
+                        "DbUpdateConcurrencyException при обновлении заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). Перезагружаем заказ и повторяем обновление.", 
+                        orderId, retryCount, maxRetries);
+                    
+                    if (retryCount >= maxRetries)
+                    {
+                        _logger.LogError(ex, 
+                            "Не удалось обновить заказ {OrderId} после {MaxRetries} попыток из-за DbUpdateConcurrencyException", 
+                            orderId, maxRetries);
+                        throw;
+                    }
+                    
+                    // Перезагружаем заказ из БД перед повторной попыткой
+                    var reloadedOrder = await _orderRepository.GetByIdAsync(orderId);
+                    if (reloadedOrder == null)
+                    {
+                        _logger.LogError("Заказ {OrderId} не найден при перезагрузке после DbUpdateConcurrencyException", orderId);
+                        throw new InvalidOperationException($"Заказ {orderId} не найден в базе данных");
+                    }
+                    
+                    // Проверяем дедупликацию для перезагруженного заказа
+                    var reloadedOldStatus = reloadedOrder.Status;
+                    bool reloadedIsDuplicate = false;
+                    
+                    if (reloadedOrder.StatusHistory != null && reloadedOrder.StatusHistory.Any())
+                    {
+                        var reloadedLastStatusHistory = reloadedOrder.StatusHistory
+                            .Where(h => h.Status == newStatus)
+                            .OrderByDescending(h => h.ChangedAt)
+                            .FirstOrDefault();
+                        
+                        if (reloadedLastStatusHistory != null && reloadedOldStatus == newStatus)
+                        {
+                            var reloadedTimeDifference = Math.Abs((statusChangedAt - reloadedLastStatusHistory.ChangedAt).TotalSeconds);
+                            if (reloadedTimeDifference < 5)
+                            {
+                                reloadedIsDuplicate = true;
+                                _logger.LogInformation("=== [DUPLICATE NOTIFICATION] При перезагрузке обнаружено дублирующее уведомление для заказа {OrderId} ===", orderId);
+                            }
+                        }
+                    }
+                    
+                    // Если это дубликат и нет других изменений, возвращаем успешный ответ
+                    var reloadedHasOtherChanges = reloadedOrder.TotalAmount != order.TotalAmount
+                        || reloadedOrder.TrackingNumber != order.TrackingNumber
+                        || reloadedOrder.IsPriority != order.IsPriority
+                        || reloadedOrder.IsLongAssembling != order.IsLongAssembling
+                        || reloadedOrder.FimBizOrderId != order.FimBizOrderId
+                        || reloadedOrder.Carrier != order.Carrier
+                        || request.BillInfo != null
+                        || request.UpdInfo != null;
+                    
+                    if (reloadedIsDuplicate && !reloadedHasOtherChanges && reloadedOldStatus == newStatus)
+                    {
+                        _logger.LogInformation("=== [DUPLICATE NOTIFICATION] Дублирующее уведомление для заказа {OrderId} пропущено после перезагрузки ===", orderId);
+                        return new NotifyOrderStatusChangeResponse
+                        {
+                            Success = true,
+                            Message = "Уведомление уже было обработано ранее (дубликат)"
+                        };
+                    }
+                    
+                    // Применяем изменения к перезагруженному заказу
+                    reloadedOrder.Status = newStatus;
+                    reloadedOrder.FimBizOrderId = request.FimBizOrderId;
+                    reloadedOrder.UpdatedAt = DateTime.UtcNow;
+                    
+                    if (request.HasModifiedPrice)
+                    {
+                        reloadedOrder.TotalAmount = (decimal)request.ModifiedPrice / 100;
+                    }
+                    
+                    reloadedOrder.TrackingNumber = string.IsNullOrEmpty(request.TrackingNumber) ? null : request.TrackingNumber;
+                    reloadedOrder.Carrier = string.IsNullOrEmpty(request.Carrier) ? null : request.Carrier;
+                    reloadedOrder.IsPriority = request.IsPriority;
+                    reloadedOrder.IsLongAssembling = request.IsLongAssembling;
+                    
+                    if (request.HasAssembledAt && request.AssembledAt > 0)
+                    {
+                        reloadedOrder.AssembledAt = DateTimeOffset.FromUnixTimeSeconds(request.AssembledAt).UtcDateTime;
+                    }
+                    
+                    if (request.HasShippedAt && request.ShippedAt > 0)
+                    {
+                        reloadedOrder.ShippedAt = DateTimeOffset.FromUnixTimeSeconds(request.ShippedAt).UtcDateTime;
+                    }
+                    
+                    if (request.HasDeliveredAt && request.DeliveredAt > 0)
+                    {
+                        reloadedOrder.DeliveredAt = DateTimeOffset.FromUnixTimeSeconds(request.DeliveredAt).UtcDateTime;
+                    }
+                    
+                    reloadedOrder.SyncedWithFimBizAt = DateTime.UtcNow;
+                    
+                    // Добавляем запись в историю статусов, если статус изменился и это не дубликат
+                    if (reloadedOrder.Status != newStatus && !reloadedIsDuplicate)
+                    {
+                        var statusHistory = new OrderStatusHistory
+                        {
+                            Id = Guid.NewGuid(),
+                            OrderId = reloadedOrder.Id,
+                            Status = newStatus,
+                            Comment = !string.IsNullOrEmpty(request.Comment) ? request.Comment : null,
+                            ChangedAt = statusChangedAt
+                        };
+                        reloadedOrder.StatusHistory.Add(statusHistory);
+                    }
+                    
+                    // Обрабатываем bill_info и upd_info, если они переданы
+                    if (request.BillInfo != null)
+                    {
+                        await ProcessBillInfoAsync(reloadedOrder, request.BillInfo);
+                    }
+                    
+                    if (request.UpdInfo != null)
+                    {
+                        await ProcessUpdInfoAsync(reloadedOrder, request.UpdInfo);
+                    }
+                    
+                    order = reloadedOrder;
+                }
+            }
 
             // Отправляем уведомление при изменении статуса на ключевые статусы
             if (oldStatus != newStatus && ShouldNotifyStatus(newStatus))

@@ -88,10 +88,69 @@ public class OrderRepository : IOrderRepository
     {
         order.UpdatedAt = DateTime.UtcNow;
 
-        _context.Orders.Update(order);
-        await _context.SaveChangesAsync();
-
-        return order;
+        // Используем Entry API для безопасного обновления, чтобы избежать DbUpdateConcurrencyException
+        var entry = _context.Entry(order);
+        
+        if (entry.State == EntityState.Detached)
+        {
+            // Если заказ не отслеживается, загружаем его из БД без навигационных свойств
+            var existingOrder = await _context.Orders.FindAsync(order.Id);
+            if (existingOrder == null)
+            {
+                throw new InvalidOperationException($"Заказ с ID {order.Id} не найден в базе данных");
+            }
+            
+            // Обновляем только скалярные свойства через Entry API
+            var existingEntry = _context.Entry(existingOrder);
+            existingEntry.Property(o => o.Status).CurrentValue = order.Status;
+            existingEntry.Property(o => o.OrderNumber).CurrentValue = order.OrderNumber;
+            existingEntry.Property(o => o.TotalAmount).CurrentValue = order.TotalAmount;
+            existingEntry.Property(o => o.TrackingNumber).CurrentValue = order.TrackingNumber;
+            existingEntry.Property(o => o.Carrier).CurrentValue = order.Carrier;
+            existingEntry.Property(o => o.DeliveryType).CurrentValue = order.DeliveryType;
+            existingEntry.Property(o => o.IsPriority).CurrentValue = order.IsPriority;
+            existingEntry.Property(o => o.IsLongAssembling).CurrentValue = order.IsLongAssembling;
+            existingEntry.Property(o => o.FimBizOrderId).CurrentValue = order.FimBizOrderId;
+            existingEntry.Property(o => o.InvoiceId).CurrentValue = order.InvoiceId;
+            existingEntry.Property(o => o.UpdDocumentId).CurrentValue = order.UpdDocumentId;
+            existingEntry.Property(o => o.AssembledAt).CurrentValue = order.AssembledAt;
+            existingEntry.Property(o => o.ShippedAt).CurrentValue = order.ShippedAt;
+            existingEntry.Property(o => o.DeliveredAt).CurrentValue = order.DeliveredAt;
+            existingEntry.Property(o => o.AssemblerId).CurrentValue = order.AssemblerId;
+            existingEntry.Property(o => o.DriverId).CurrentValue = order.DriverId;
+            existingEntry.Property(o => o.SyncedWithFimBizAt).CurrentValue = order.SyncedWithFimBizAt;
+            existingEntry.Property(o => o.UpdatedAt).CurrentValue = order.UpdatedAt;
+            
+            // Помечаем только измененные свойства как Modified
+            existingEntry.Property(o => o.Status).IsModified = true;
+            existingEntry.Property(o => o.OrderNumber).IsModified = true;
+            existingEntry.Property(o => o.TotalAmount).IsModified = true;
+            existingEntry.Property(o => o.TrackingNumber).IsModified = true;
+            existingEntry.Property(o => o.Carrier).IsModified = true;
+            existingEntry.Property(o => o.DeliveryType).IsModified = true;
+            existingEntry.Property(o => o.IsPriority).IsModified = true;
+            existingEntry.Property(o => o.IsLongAssembling).IsModified = true;
+            existingEntry.Property(o => o.FimBizOrderId).IsModified = true;
+            existingEntry.Property(o => o.InvoiceId).IsModified = true;
+            existingEntry.Property(o => o.UpdDocumentId).IsModified = true;
+            existingEntry.Property(o => o.AssembledAt).IsModified = true;
+            existingEntry.Property(o => o.ShippedAt).IsModified = true;
+            existingEntry.Property(o => o.DeliveredAt).IsModified = true;
+            existingEntry.Property(o => o.AssemblerId).IsModified = true;
+            existingEntry.Property(o => o.DriverId).IsModified = true;
+            existingEntry.Property(o => o.SyncedWithFimBizAt).IsModified = true;
+            existingEntry.Property(o => o.UpdatedAt).IsModified = true;
+            
+            await _context.SaveChangesAsync();
+            return existingOrder;
+        }
+        else
+        {
+            // Если заказ уже отслеживается, просто помечаем его как измененный
+            entry.State = EntityState.Modified;
+            await _context.SaveChangesAsync();
+            return order;
+        }
     }
 
     public async Task<bool> DeleteAsync(Guid id)

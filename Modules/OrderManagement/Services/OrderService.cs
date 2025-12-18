@@ -1203,13 +1203,17 @@ public class OrderService : IOrderService
             orderId, userId, oldStatus, OrderStatus.Cancelled, reason ?? "не указана");
 
         // Перезагружаем заказ из БД, чтобы получить актуальный FimBizOrderId
+        _logger.LogInformation("=== [CANCEL ORDER] Перезагрузка заказа {OrderId} для проверки синхронизации с FimBiz ===", orderId);
         var updatedOrder = await _orderRepository.GetByIdAsync(orderId);
         if (updatedOrder == null)
         {
-            _logger.LogWarning("Не удалось перезагрузить заказ {OrderId} после отмены для проверки FimBizOrderId", orderId);
+            _logger.LogWarning("=== [CANCEL ORDER] Не удалось перезагрузить заказ {OrderId} после отмены для проверки FimBizOrderId ===", orderId);
         }
         else
         {
+            _logger.LogInformation("=== [CANCEL ORDER] Заказ {OrderId} перезагружен. FimBizOrderId: {FimBizOrderId}, Status: {Status}, OrderNumber: {OrderNumber} ===", 
+                orderId, updatedOrder.FimBizOrderId?.ToString() ?? "отсутствует", updatedOrder.Status, updatedOrder.OrderNumber ?? "не указан");
+            
             // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
             if (updatedOrder.FimBizOrderId.HasValue)
             {
@@ -1238,7 +1242,7 @@ public class OrderService : IOrderService
             }
             else
             {
-                _logger.LogInformation("Заказ {OrderId} не синхронизирован с FimBiz (FimBizOrderId отсутствует). Обновление статуса в FimBiz не требуется", orderId);
+                _logger.LogWarning("=== [CANCEL ORDER] Заказ {OrderId} не синхронизирован с FimBiz (FimBizOrderId отсутствует). Обновление статуса в FimBiz не требуется. Заказ был создан локально, но не был отправлен в FimBiz или синхронизация не завершилась ===", orderId);
             }
         }
 
