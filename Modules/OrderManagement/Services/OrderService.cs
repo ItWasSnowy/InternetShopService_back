@@ -620,24 +620,25 @@ public class OrderService : IOrderService
                     if (parts.Length == 5)
                     {
                         // Берем последнюю часть Guid (после последнего дефиса)
-                        var lastPart = parts[4]; // "000000000167"
+                        var lastPart = parts[4]; // "000000000019"
                         
-                        // Убираем незначащие нули и конвертируем в int32
-                        if (int.TryParse(lastPart.TrimStart('0'), out var nomenclatureIdInt32) && nomenclatureIdInt32 > 0)
+                        // Парсим как hex, так как Guid хранит значения в hex формате
+                        // Например: "000000000019" (hex) = 25 (decimal)
+                        if (int.TryParse(lastPart, System.Globalization.NumberStyles.HexNumber, null, out var nomenclatureIdInt32) && nomenclatureIdInt32 > 0)
                         {
                             grpcItem.NomenclatureId = nomenclatureIdInt32;
                             
-                            _logger.LogInformation("Конвертация NomenclatureId: Guid={Guid} -> int32={Int32} (из последней части '{LastPart}')", 
+                            _logger.LogInformation("Конвертация NomenclatureId: Guid={Guid} -> int32={Int32} (из последней части '{LastPart}' как hex)", 
                                 item.NomenclatureId, nomenclatureIdInt32, lastPart);
                         }
                         else
                         {
-                            // Если не удалось распарсить, пробуем как hex
-                            if (int.TryParse(lastPart, System.Globalization.NumberStyles.HexNumber, null, out var hexValue) && hexValue > 0)
+                            // Если не удалось распарсить как hex, пробуем как decimal (для обратной совместимости)
+                            if (int.TryParse(lastPart.TrimStart('0'), out var decimalValue) && decimalValue > 0)
                             {
-                                grpcItem.NomenclatureId = hexValue;
-                                _logger.LogInformation("Конвертация NomenclatureId (hex): Guid={Guid} -> int32={Int32} (из последней части '{LastPart}')", 
-                                    item.NomenclatureId, hexValue, lastPart);
+                                grpcItem.NomenclatureId = decimalValue;
+                                _logger.LogInformation("Конвертация NomenclatureId (decimal): Guid={Guid} -> int32={Int32} (из последней части '{LastPart}')", 
+                                    item.NomenclatureId, decimalValue, lastPart);
                             }
                             else
                             {

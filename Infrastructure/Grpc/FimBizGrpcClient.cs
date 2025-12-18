@@ -496,7 +496,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
                 Id = Guid.NewGuid(),
                 CounterpartyId = counterpartyId,
                 NomenclatureGroupId = rule.NomenclatureGroupId > 0 
-                    ? Guid.Parse(rule.NomenclatureGroupId.ToString()) 
+                    ? ConvertInt32ToGuid(rule.NomenclatureGroupId) 
                     : null,
                 NomenclatureId = null, // Скидка на группу, не на конкретную позицию
                 DiscountPercent = (decimal)rule.DiscountPercent,
@@ -543,6 +543,29 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
             normalized = "7" + normalized.Substring(1);
 
         return normalized;
+    }
+
+    /// <summary>
+    /// Преобразование int32 в Guid (для обратной совместимости с FimBiz ID)
+    /// Формат Guid: "00000000-0000-0000-0000-000000000019" где 19 - это hex представление числа (25 decimal = 0x19)
+    /// Используем big-endian для последних 4 байт, чтобы число было в конце строки
+    /// </summary>
+    private static Guid ConvertInt32ToGuid(int value)
+    {
+        // Создаем массив из 16 байт (размер Guid)
+        var bytes = new byte[16];
+        
+        // Заполняем первые 12 байт нулями
+        // Индексы 0-11 остаются нулями
+        
+        // Помещаем значение int32 в последние 4 байта (индексы 12-15)
+        // Используем big-endian порядок байтов для правильного отображения в hex строке
+        // Например: 25 (decimal) = 0x19 (hex) -> [00, 00, 00, 19] -> "000000000019"
+        var int32Bytes = BitConverter.GetBytes(value); // little-endian: [19, 00, 00, 00] для 25
+        Array.Reverse(int32Bytes); // big-endian: [00, 00, 00, 19] для 25
+        Array.Copy(int32Bytes, 0, bytes, 12, 4);
+        
+        return new Guid(bytes);
     }
 
     public void Dispose()
