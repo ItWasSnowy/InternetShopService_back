@@ -496,7 +496,7 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
                 Id = Guid.NewGuid(),
                 CounterpartyId = counterpartyId,
                 NomenclatureGroupId = rule.NomenclatureGroupId > 0 
-                    ? ConvertInt32ToGuid(rule.NomenclatureGroupId) 
+                    ? rule.NomenclatureGroupId 
                     : null,
                 NomenclatureId = rule.HasNomenclatureId && rule.NomenclatureId > 0 
                     ? rule.NomenclatureId 

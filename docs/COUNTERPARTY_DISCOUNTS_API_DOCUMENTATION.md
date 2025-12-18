@@ -71,8 +71,8 @@ Content-Type: application/json
 | Поле | Тип | Описание |
 |------|-----|----------|
 | `id` | `Guid` | Уникальный идентификатор скидки |
-| `nomenclatureGroupId` | `Guid?` | ID группы номенклатуры (null, если скидка на конкретный товар) |
-| `nomenclatureId` | `Guid?` | ID конкретного товара (null, если скидка на группу) |
+| `nomenclatureGroupId` | `int?` | ID группы номенклатуры (null, если скидка на конкретный товар) |
+| `nomenclatureId` | `int?` | ID конкретного товара (null, если скидка на группу) |
 | `discountPercent` | `decimal` | Процент скидки (от 0 до 100) |
 | `validFrom` | `DateTime` | Дата начала действия скидки (UTC) |
 | `validTo` | `DateTime?` | Дата окончания действия скидки (UTC, null = без ограничений) |
@@ -204,8 +204,8 @@ using System.Text.Json;
 public class DiscountDto
 {
     public Guid Id { get; set; }
-    public Guid? NomenclatureGroupId { get; set; }
-    public Guid? NomenclatureId { get; set; }
+    public int? NomenclatureGroupId { get; set; }
+    public int? NomenclatureId { get; set; }
     public decimal DiscountPercent { get; set; }
     public DateTime ValidFrom { get; set; }
     public DateTime? ValidTo { get; set; }

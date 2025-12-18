@@ -4,7 +4,7 @@ public class Discount
 {
     public Guid Id { get; set; }
     public Guid CounterpartyId { get; set; }
-    public Guid? NomenclatureGroupId { get; set; } // null если скидка на конкретную позицию
+    public int? NomenclatureGroupId { get; set; } // null если скидка на конкретную позицию
     public int? NomenclatureId { get; set; } // null если скидка на группу
     public decimal DiscountPercent { get; set; }
     public DateTime ValidFrom { get; set; }

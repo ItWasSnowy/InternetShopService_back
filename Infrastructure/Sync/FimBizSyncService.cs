@@ -627,8 +627,8 @@ public class FimBizSyncService : BackgroundService
 
             try
             {
-                Guid? nomenclatureGroupIdGuid = rule.NomenclatureGroupId > 0
-                    ? ConvertInt32ToGuid(rule.NomenclatureGroupId)
+                int? nomenclatureGroupIdInt = rule.NomenclatureGroupId > 0
+                    ? rule.NomenclatureGroupId
                     : null;
                 int? nomenclatureIdInt = rule.HasNomenclatureId && rule.NomenclatureId > 0
                     ? rule.NomenclatureId
@@ -638,7 +638,7 @@ public class FimBizSyncService : BackgroundService
                 {
                     Id = Guid.NewGuid(),
                     CounterpartyId = counterparty.Id,
-                    NomenclatureGroupId = nomenclatureGroupIdGuid,
+                    NomenclatureGroupId = nomenclatureGroupIdInt,
                     NomenclatureId = nomenclatureIdInt,
                     DiscountPercent = (decimal)rule.DiscountPercent,
                     ValidFrom = validFrom,
@@ -657,12 +657,12 @@ public class FimBizSyncService : BackgroundService
                 
                 _logger.LogInformation(
                     "Добавлена скидка ID={DiscountId}, Percent={Percent}%, " +
-                    "NomenclatureGroupId: FimBiz={GroupIdFimBiz}, Guid={GroupIdGuid}, " +
+                    "NomenclatureGroupId: FimBiz={GroupIdFimBiz}, int={GroupIdInt}, " +
                     "NomenclatureId: FimBiz={NomenclatureIdFimBiz}, int={NomenclatureIdInt} " +
                     "для контрагента {ContractorId}",
                     rule.Id, rule.DiscountPercent, 
                     rule.NomenclatureGroupId > 0 ? rule.NomenclatureGroupId.ToString() : "null",
-                    nomenclatureGroupIdGuid?.ToString() ?? "null",
+                    nomenclatureGroupIdInt?.ToString() ?? "null",
                     rule.HasNomenclatureId && rule.NomenclatureId > 0 ? rule.NomenclatureId.ToString() : "null",
                     nomenclatureIdInt?.ToString() ?? "null",
                     contractor.ContractorId);

@@ -139,7 +139,7 @@
 [
   {
     "id": "guid",
-    "nomenclatureGroupId": "00000000-0000-0000-0000-000000000005",  // string (Guid) или null
+    "nomenclatureGroupId": 5,  // number (int) или null
     "nomenclatureId": "00000000-0000-0000-0000-000000000031",  // string (Guid) или null
     "discountPercent": 10.0,
     ...
@@ -150,7 +150,7 @@
 [
   {
     "id": "guid",
-    "nomenclatureGroupId": "00000000-0000-0000-0000-000000000005",  // string (Guid) или null (БЕЗ ИЗМЕНЕНИЙ)
+    "nomenclatureGroupId": 5,  // number (int) или null
     "nomenclatureId": 31,  // number (int) или null
     "discountPercent": 10.0,
     ...
@@ -158,7 +158,7 @@
 ]
 ```
 
-**Важно:** `nomenclatureGroupId` остался `Guid` (string), изменился только `nomenclatureId`.
+**Важно:** `nomenclatureGroupId` также изменен с `Guid` (string) на `int` (number).
 
 ## Необходимые изменения во фронтенде
 
@@ -184,8 +184,8 @@ interface CartItemDto {
 
 interface DiscountDto {
   id: string;
-  nomenclatureGroupId: string | null;  // Guid
-  nomenclatureId: string | null;  // Guid
+  nomenclatureGroupId: number | null;  // int
+  nomenclatureId: number | null;  // int
   // ...
 }
 ```
@@ -208,7 +208,7 @@ interface CartItemDto {
 
 interface DiscountDto {
   id: string;
-  nomenclatureGroupId: string | null;  // Guid (БЕЗ ИЗМЕНЕНИЙ)
+  nomenclatureGroupId: number | null;  // int
   nomenclatureId: number | null;  // int
   // ...
 }
@@ -385,9 +385,8 @@ const OrderItemComponent: React.FC<{ item: OrderItem }> = ({ item }) => {
 
 ### Что НЕ изменилось?
 
-- `nomenclatureGroupId` остался `Guid` (string) - это ID группы номенклатур
 - Все остальные GUID поля (`id`, `orderId`, `cartId` и т.д.) остались без изменений
-- Структура API осталась прежней, изменился только тип одного поля
+- Структура API осталась прежней, изменился только тип полей `nomenclatureId` и `nomenclatureGroupId`
 
 ## Контакты
 

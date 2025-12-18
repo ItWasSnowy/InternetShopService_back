@@ -19,7 +19,7 @@ public class CounterpartyDto
 public class DiscountDto
 {
     public Guid Id { get; set; }
-    public Guid? NomenclatureGroupId { get; set; }
+    public int? NomenclatureGroupId { get; set; }
     public int? NomenclatureId { get; set; }
     public decimal DiscountPercent { get; set; }
     public DateTime ValidFrom { get; set; }
