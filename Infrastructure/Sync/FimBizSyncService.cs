@@ -595,7 +595,7 @@ public class FimBizSyncService : BackgroundService
             // Логируем все правила, даже неактивные
             if (!rule.IsActive)
             {
-                _logger.LogDebug("Пропущена неактивная скидка ID={DiscountId}, Name={Name} для контрагента {ContractorId}",
+                _logger.LogInformation("Пропущена неактивная скидка ID={DiscountId}, Name={Name} для контрагента {ContractorId}",
                     rule.Id, rule.Name ?? "без названия", contractor.ContractorId);
                 skippedCount++;
                 continue;
@@ -609,10 +609,14 @@ public class FimBizSyncService : BackgroundService
                 ? DateTimeOffset.FromUnixTimeSeconds(rule.ValidTo).UtcDateTime
                 : (DateTime?)null;
 
+            // Логируем даты для диагностики
+            _logger.LogInformation("Обработка скидки ID={DiscountId}: HasValidFrom={HasValidFrom}, ValidFrom={ValidFrom}, HasValidTo={HasValidTo}, ValidTo={ValidTo}, Now={Now}",
+                rule.Id, rule.HasValidFrom, validFrom, rule.HasValidTo, validTo?.ToString() ?? "null", now);
+
             // Проверяем, что скидка еще действительна
             if (validFrom > now || (validTo.HasValue && validTo.Value < now))
             {
-                _logger.LogDebug("Пропущена скидка ID={DiscountId} (недействительна по датам) для контрагента {ContractorId}. ValidFrom={ValidFrom}, ValidTo={ValidTo}, Now={Now}",
+                _logger.LogInformation("Пропущена скидка ID={DiscountId} (недействительна по датам) для контрагента {ContractorId}. ValidFrom={ValidFrom}, ValidTo={ValidTo}, Now={Now}",
                     rule.Id, contractor.ContractorId, validFrom, validTo?.ToString() ?? "null", now);
                 skippedCount++;
                 continue;
@@ -645,7 +649,7 @@ public class FimBizSyncService : BackgroundService
                 dbContext.Discounts.Add(discount);
                 addedCount++;
                 
-                _logger.LogDebug("Добавлена скидка ID={DiscountId}, Percent={Percent}%, NomenclatureGroupId={GroupId}, NomenclatureId={NomenclatureId} для контрагента {ContractorId}",
+                _logger.LogInformation("Добавлена скидка ID={DiscountId}, Percent={Percent}%, NomenclatureGroupId={GroupId}, NomenclatureId={NomenclatureId} для контрагента {ContractorId}",
                     rule.Id, rule.DiscountPercent, 
                     rule.NomenclatureGroupId > 0 ? rule.NomenclatureGroupId.ToString() : "null",
                     rule.HasNomenclatureId && rule.NomenclatureId > 0 ? rule.NomenclatureId.ToString() : "null",
@@ -653,8 +657,10 @@ public class FimBizSyncService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при обработке скидки ID={DiscountId} для контрагента {ContractorId}", 
-                    rule.Id, contractor.ContractorId);
+                _logger.LogError(ex, "Ошибка при обработке скидки ID={DiscountId} для контрагента {ContractorId}. NomenclatureGroupId={GroupId}, NomenclatureId={NomenclatureId}", 
+                    rule.Id, contractor.ContractorId,
+                    rule.NomenclatureGroupId > 0 ? rule.NomenclatureGroupId.ToString() : "null",
+                    rule.HasNomenclatureId && rule.NomenclatureId > 0 ? rule.NomenclatureId.ToString() : "null");
                 skippedCount++;
             }
         }
