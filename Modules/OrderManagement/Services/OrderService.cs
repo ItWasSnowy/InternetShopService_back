@@ -257,7 +257,11 @@ public class OrderService : IOrderService
         // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
         if (order.FimBizOrderId.HasValue)
         {
-            await SendOrderStatusUpdateToFimBizAsync(order, status);
+            var syncSuccess = await SendOrderStatusUpdateToFimBizAsync(order, status);
+            if (!syncSuccess)
+            {
+                _logger.LogWarning("Не удалось отправить обновление статуса заказа {OrderId} в FimBiz, но заказ обновлен локально", order.Id);
+            }
         }
 
         // Отправляем уведомление на email контрагента при изменении статуса
@@ -648,7 +652,7 @@ public class OrderService : IOrderService
         }
     }
 
-    private async Task SendOrderStatusUpdateToFimBizAsync(LocalOrder order, OrderStatus newStatus)
+    private async Task<bool> SendOrderStatusUpdateToFimBizAsync(LocalOrder order, OrderStatus newStatus)
     {
         try
         {
@@ -657,14 +661,14 @@ public class OrderService : IOrderService
             if (userAccount == null)
             {
                 _logger.LogWarning("Не удалось отправить обновление статуса заказа {OrderId}: пользователь не найден", order.Id);
-                return;
+                return false;
             }
 
             var shop = await _shopRepository.GetByIdAsync(userAccount.ShopId);
             if (shop == null || shop.FimBizCompanyId <= 0)
             {
                 _logger.LogWarning("Не удалось отправить обновление статуса заказа {OrderId}: магазин не найден или неверный FimBizCompanyId", order.Id);
-                return;
+                return false;
             }
 
             // Преобразуем статус из нашей модели в gRPC
@@ -677,29 +681,34 @@ public class OrderService : IOrderService
                 NewStatus = grpcStatus
             };
 
-            _logger.LogInformation("Отправка обновления статуса заказа {OrderId} в FimBiz. Новый статус: {Status}", 
-                order.Id, newStatus);
+            _logger.LogInformation("Отправка обновления статуса заказа {OrderId} в FimBiz. Локальный статус: {LocalStatus}, gRPC статус: {GrpcStatus}, ExternalOrderId: {ExternalOrderId}, CompanyId: {CompanyId}, FimBizOrderId: {FimBizOrderId}", 
+                order.Id, newStatus, grpcStatus, updateRequest.ExternalOrderId, updateRequest.CompanyId, order.FimBizOrderId?.ToString() ?? "не указан");
 
             var response = await _fimBizGrpcClient.UpdateOrderStatusAsync(updateRequest);
 
             if (response.Success)
             {
-                _logger.LogInformation("Статус заказа {OrderId} успешно обновлен в FimBiz", order.Id);
+                _logger.LogInformation("Статус заказа {OrderId} успешно обновлен в FimBiz. Response.Success: {Success}, Response.Message: {Message}", 
+                    order.Id, response.Success, response.Message ?? "нет сообщения");
+                return true;
             }
             else
             {
-                _logger.LogWarning("Не удалось обновить статус заказа {OrderId} в FimBiz: {Message}", 
-                    order.Id, response.Message ?? "Неизвестная ошибка");
+                _logger.LogWarning("Не удалось обновить статус заказа {OrderId} в FimBiz. Response.Success: {Success}, Response.Message: {Message}", 
+                    order.Id, response.Success, response.Message ?? "Неизвестная ошибка");
+                return false;
             }
         }
         catch (Grpc.Core.RpcException ex)
         {
             _logger.LogError(ex, "Ошибка gRPC при обновлении статуса заказа {OrderId} в FimBiz. StatusCode: {StatusCode}, Detail: {Detail}", 
                 order.Id, ex.StatusCode, ex.Status.Detail);
+            return false;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Неожиданная ошибка при обновлении статуса заказа {OrderId} в FimBiz", order.Id);
+            return false;
         }
     }
 
@@ -1005,7 +1014,11 @@ public class OrderService : IOrderService
         // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
         if (order.FimBizOrderId.HasValue)
         {
-            await SendOrderStatusUpdateToFimBizAsync(order, OrderStatus.InvoiceConfirmed);
+            var syncSuccess = await SendOrderStatusUpdateToFimBizAsync(order, OrderStatus.InvoiceConfirmed);
+            if (!syncSuccess)
+            {
+                _logger.LogWarning("Не удалось отправить обновление статуса подтверждения счета заказа {OrderId} в FimBiz, но заказ обновлен локально", order.Id);
+            }
         }
 
         // Отправляем уведомление на email контрагента
@@ -1200,16 +1213,26 @@ public class OrderService : IOrderService
             // Если заказ синхронизирован с FimBiz, отправляем обновление статуса
             if (updatedOrder.FimBizOrderId.HasValue)
             {
+                _logger.LogInformation("=== [CANCEL ORDER] Отправка статуса отмены в FimBiz ===");
                 _logger.LogInformation("Заказ {OrderId} имеет FimBizOrderId: {FimBizOrderId}. Отправка обновления статуса в FimBiz", 
                     orderId, updatedOrder.FimBizOrderId.Value);
                 
                 try
                 {
-                    await SendOrderStatusUpdateToFimBizAsync(updatedOrder, OrderStatus.Cancelled);
+                    var syncSuccess = await SendOrderStatusUpdateToFimBizAsync(updatedOrder, OrderStatus.Cancelled);
+                    
+                    if (syncSuccess)
+                    {
+                        _logger.LogInformation("=== [CANCEL ORDER] Статус отмены успешно отправлен в FimBiz для заказа {OrderId} ===", orderId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("=== [CANCEL ORDER] Не удалось отправить статус отмены в FimBiz для заказа {OrderId}. Заказ отменен локально, но FimBiz может не знать об отмене ===", orderId);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Ошибка при отправке обновления статуса отмены заказа {OrderId} в FimBiz", orderId);
+                    _logger.LogError(ex, "=== [CANCEL ORDER] Исключение при отправке обновления статуса отмены заказа {OrderId} в FimBiz ===", orderId);
                     // Не прерываем выполнение, заказ уже отменен локально
                 }
             }

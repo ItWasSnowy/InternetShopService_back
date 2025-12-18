@@ -275,13 +275,45 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
         }
         catch (RpcException ex)
         {
-            _logger.LogError(ex, "Ошибка gRPC при обновлении статуса заказа {ExternalOrderId}. StatusCode: {StatusCode}, Detail: {Detail}", 
-                request.ExternalOrderId, ex.StatusCode, ex.Status.Detail);
-            if (ex.StatusCode == StatusCode.Unauthenticated)
+            // Различаем типы ошибок и логируем их по-разному
+            switch (ex.StatusCode)
             {
-                throw new UnauthorizedAccessException("Неверный API ключ для FimBiz");
+                case StatusCode.Unauthenticated:
+                    _logger.LogError(ex, "=== [UPDATE ORDER STATUS] ОШИБКА АВТОРИЗАЦИИ ===");
+                    _logger.LogError("Неверный API ключ при обновлении статуса заказа {ExternalOrderId}. StatusCode: {StatusCode}, Detail: {Detail}", 
+                        request.ExternalOrderId, ex.StatusCode, ex.Status.Detail);
+                    throw new UnauthorizedAccessException("Неверный API ключ для FimBiz", ex);
+                
+                case StatusCode.NotFound:
+                    _logger.LogWarning("=== [UPDATE ORDER STATUS] ЗАКАЗ НЕ НАЙДЕН В FIMBIZ ===");
+                    _logger.LogWarning("Заказ {ExternalOrderId} не найден в FimBiz при обновлении статуса. StatusCode: {StatusCode}, Detail: {Detail}", 
+                        request.ExternalOrderId, ex.StatusCode, ex.Status.Detail);
+                    throw;
+                
+                case StatusCode.InvalidArgument:
+                    _logger.LogError("=== [UPDATE ORDER STATUS] НЕВЕРНЫЕ АРГУМЕНТЫ ===");
+                    _logger.LogError("Неверные аргументы при обновлении статуса заказа {ExternalOrderId}. StatusCode: {StatusCode}, Detail: {Detail}, Request: ExternalOrderId={ExtOrderId}, CompanyId={CompanyId}, NewStatus={NewStatus}", 
+                        request.ExternalOrderId, ex.StatusCode, ex.Status.Detail, request.ExternalOrderId, request.CompanyId, request.NewStatus);
+                    throw;
+                
+                case StatusCode.Internal:
+                    _logger.LogError("=== [UPDATE ORDER STATUS] ВНУТРЕННЯЯ ОШИБКА FIMBIZ ===");
+                    _logger.LogError("Внутренняя ошибка FimBiz при обновлении статуса заказа {ExternalOrderId}. StatusCode: {StatusCode}, Detail: {Detail}", 
+                        request.ExternalOrderId, ex.StatusCode, ex.Status.Detail);
+                    throw;
+                
+                case StatusCode.Unavailable:
+                    _logger.LogError("=== [UPDATE ORDER STATUS] FIMBIZ НЕДОСТУПЕН ===");
+                    _logger.LogError("FimBiz недоступен при обновлении статуса заказа {ExternalOrderId}. StatusCode: {StatusCode}, Detail: {Detail}", 
+                        request.ExternalOrderId, ex.StatusCode, ex.Status.Detail);
+                    throw;
+                
+                default:
+                    _logger.LogError("=== [UPDATE ORDER STATUS] НЕИЗВЕСТНАЯ ОШИБКА gRPC ===");
+                    _logger.LogError("Неизвестная ошибка gRPC при обновлении статуса заказа {ExternalOrderId}. StatusCode: {StatusCode}, Detail: {Detail}", 
+                        request.ExternalOrderId, ex.StatusCode, ex.Status.Detail);
+                    throw;
             }
-            throw;
         }
     }
 

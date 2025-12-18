@@ -242,6 +242,14 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // Преобразуем статус из gRPC в локальный enum
             var newStatus = MapGrpcStatusToLocal(request.NewStatus);
             
+            // Специальное логирование для статуса Cancelled
+            if (request.NewStatus == GrpcOrderStatus.Cancelled || newStatus == OrderStatus.Cancelled)
+            {
+                _logger.LogInformation("=== [ORDER STATUS CHANGE] ПОЛУЧЕН СТАТУС ОТМЕНЫ ОТ FIMBIZ ===");
+                _logger.LogInformation("ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, GrpcStatus: {GrpcStatus}, LocalStatus: {LocalStatus}", 
+                    request.ExternalOrderId, request.FimBizOrderId, request.NewStatus, newStatus);
+            }
+            
             // Сохраняем старые значения для проверки изменений
             var oldStatus = order.Status;
             var oldTotalAmount = order.TotalAmount;
@@ -261,6 +269,13 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
             _logger.LogInformation("Обновление статуса заказа {OrderId} с {OldStatus} на {NewStatus} (FimBiz: {GrpcStatus})", 
                 orderId, oldStatus, newStatus, request.NewStatus);
+            
+            // Дополнительное логирование для статуса Cancelled
+            if (newStatus == OrderStatus.Cancelled)
+            {
+                _logger.LogInformation("=== [ORDER STATUS CHANGE] Заказ {OrderId} отменен в FimBiz. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, Comment: {Comment} ===", 
+                    orderId, request.ExternalOrderId, request.FimBizOrderId, request.Comment ?? "нет комментария");
+            }
 
             // Обновляем дополнительные поля, если они переданы
             if (request.HasModifiedPrice)
