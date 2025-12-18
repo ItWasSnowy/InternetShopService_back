@@ -481,40 +481,65 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             }
 
             // Сохраняем изменения (ВСЕГДА сохраняем, даже если статус не изменился, т.к. могут быть другие изменения)
-            // Обрабатываем DbUpdateConcurrencyException с повторной попыткой
+            // Обрабатываем DbUpdateConcurrencyException и InvalidOperationException с повторной попыткой
             const int maxRetries = 3;
             int retryCount = 0;
             bool updateSuccess = false;
+            
+            _logger.LogInformation(
+                "=== [ORDER UPDATE] Начало обновления заказа {OrderId}. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, " +
+                "Статус: {OldStatus} -> {NewStatus}, Попытка: {RetryCount}/{MaxRetries} ===", 
+                orderId, request.ExternalOrderId, request.FimBizOrderId, oldStatus, newStatus, retryCount + 1, maxRetries);
             
             while (retryCount < maxRetries && !updateSuccess)
             {
                 try
                 {
+                    _logger.LogDebug(
+                        "=== [ORDER UPDATE] Попытка обновления заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). " +
+                        "Текущий статус в памяти: {CurrentStatus}, Целевой статус: {NewStatus} ===", 
+                        orderId, retryCount + 1, maxRetries, order.Status, newStatus);
+                    
                     await _orderRepository.UpdateAsync(order);
                     updateSuccess = true;
+                    
+                    _logger.LogInformation(
+                        "=== [ORDER UPDATE] Заказ {OrderId} успешно обновлен (попытка {RetryCount}/{MaxRetries}). " +
+                        "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId} ===", 
+                        orderId, retryCount + 1, maxRetries, request.ExternalOrderId, request.FimBizOrderId);
                 }
                 catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
                 {
                     retryCount++;
                     _logger.LogWarning(ex, 
-                        "DbUpdateConcurrencyException при обновлении заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). Перезагружаем заказ и повторяем обновление.", 
-                        orderId, retryCount, maxRetries);
+                        "=== [CONCURRENCY EXCEPTION] DbUpdateConcurrencyException при обновлении заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). " +
+                        "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, NewStatus: {NewStatus}. " +
+                        "Перезагружаем заказ и повторяем обновление. ===", 
+                        orderId, retryCount, maxRetries, request.ExternalOrderId, request.FimBizOrderId, request.NewStatus);
                     
                     if (retryCount >= maxRetries)
                     {
                         _logger.LogError(ex, 
-                            "Не удалось обновить заказ {OrderId} после {MaxRetries} попыток из-за DbUpdateConcurrencyException", 
-                            orderId, maxRetries);
+                            "=== [CONCURRENCY EXCEPTION] Не удалось обновить заказ {OrderId} после {MaxRetries} попыток из-за DbUpdateConcurrencyException. " +
+                            "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId} ===", 
+                            orderId, maxRetries, request.ExternalOrderId, request.FimBizOrderId);
                         throw;
                     }
                     
-                    // Перезагружаем заказ из БД перед повторной попыткой
-                    var reloadedOrder = await _orderRepository.GetByIdAsync(orderId);
-                    if (reloadedOrder == null)
+                    // Проверяем существование заказа перед перезагрузкой
+                    var orderExists = await _orderRepository.GetByIdAsync(orderId);
+                    if (orderExists == null)
                     {
-                        _logger.LogError("Заказ {OrderId} не найден при перезагрузке после DbUpdateConcurrencyException", orderId);
-                        throw new InvalidOperationException($"Заказ {orderId} не найден в базе данных");
+                        _logger.LogError(
+                            "=== [CONCURRENCY EXCEPTION] Заказ {OrderId} не найден при перезагрузке после DbUpdateConcurrencyException. " +
+                            "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}. " +
+                            "Возможно, заказ был удалён другим процессом между загрузкой и обновлением. ===", 
+                            orderId, request.ExternalOrderId, request.FimBizOrderId);
+                        throw new InvalidOperationException($"Заказ {orderId} не найден в базе данных. Возможно, он был удалён другим процессом.");
                     }
+                    
+                    // Перезагружаем заказ из БД перед повторной попыткой
+                    var reloadedOrder = orderExists;
                     
                     // Проверяем дедупликацию для перезагруженного заказа
                     // ВАЖНО: Сохраняем старое значение статуса ДО применения изменений
@@ -627,6 +652,48 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     }
                     
                     order = reloadedOrder;
+                }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("не найден в базе данных"))
+                {
+                    // Обрабатываем случай, когда заказ не найден (возможно, был удалён)
+                    retryCount++;
+                    _logger.LogError(ex, 
+                        "=== [ORDER NOT FOUND] Заказ {OrderId} не найден в базе данных при попытке обновления (попытка {RetryCount}/{MaxRetries}). " +
+                        "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, NewStatus: {NewStatus}. " +
+                        "Возможно, заказ был удалён другим процессом. ===", 
+                        orderId, retryCount, maxRetries, request.ExternalOrderId, request.FimBizOrderId, request.NewStatus);
+                    
+                    if (retryCount >= maxRetries)
+                    {
+                        _logger.LogError(
+                            "=== [ORDER NOT FOUND] Не удалось обновить заказ {OrderId} после {MaxRetries} попыток - заказ не найден в базе данных. " +
+                            "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId} ===", 
+                            orderId, maxRetries, request.ExternalOrderId, request.FimBizOrderId);
+                        throw;
+                    }
+                    
+                    // Пытаемся найти заказ по FimBizOrderId, если он был передан
+                    if (request.FimBizOrderId > 0)
+                    {
+                        var orderByFimBizId = await _orderRepository.GetByFimBizOrderIdAsync(request.FimBizOrderId);
+                        if (orderByFimBizId != null)
+                        {
+                            _logger.LogInformation(
+                                "=== [ORDER NOT FOUND] Заказ найден по FimBizOrderId {FimBizOrderId} после ошибки. " +
+                                "Продолжаем обновление с новым OrderId: {NewOrderId} ===", 
+                                request.FimBizOrderId, orderByFimBizId.Id);
+                            orderId = orderByFimBizId.Id;
+                            order = orderByFimBizId;
+                            // Применяем изменения к найденному заказу
+                            order.Status = newStatus;
+                            order.UpdatedAt = DateTime.UtcNow;
+                            // Продолжаем цикл для повторной попытки обновления
+                            continue;
+                        }
+                    }
+                    
+                    // Если заказ не найден ни по ID, ни по FimBizOrderId, выбрасываем исключение
+                    throw;
                 }
             }
 

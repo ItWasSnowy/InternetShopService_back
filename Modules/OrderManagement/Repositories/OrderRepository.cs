@@ -146,8 +146,34 @@ public class OrderRepository : IOrderRepository
         }
         else
         {
-            // Если заказ уже отслеживается, просто помечаем его как измененный
-            entry.State = EntityState.Modified;
+            // Если заказ уже отслеживается, проверяем его существование в БД перед обновлением
+            var exists = await _context.Orders.AnyAsync(o => o.Id == order.Id);
+            if (!exists)
+            {
+                throw new InvalidOperationException($"Заказ с ID {order.Id} не найден в базе данных. Возможно, он был удалён другим процессом.");
+            }
+            
+            // Используем селективное обновление свойств вместо EntityState.Modified
+            // Это позволяет избежать проблем с конкурентным доступом
+            entry.Property(o => o.Status).IsModified = true;
+            entry.Property(o => o.OrderNumber).IsModified = true;
+            entry.Property(o => o.TotalAmount).IsModified = true;
+            entry.Property(o => o.TrackingNumber).IsModified = true;
+            entry.Property(o => o.Carrier).IsModified = true;
+            entry.Property(o => o.DeliveryType).IsModified = true;
+            entry.Property(o => o.IsPriority).IsModified = true;
+            entry.Property(o => o.IsLongAssembling).IsModified = true;
+            entry.Property(o => o.FimBizOrderId).IsModified = true;
+            entry.Property(o => o.InvoiceId).IsModified = true;
+            entry.Property(o => o.UpdDocumentId).IsModified = true;
+            entry.Property(o => o.AssembledAt).IsModified = true;
+            entry.Property(o => o.ShippedAt).IsModified = true;
+            entry.Property(o => o.DeliveredAt).IsModified = true;
+            entry.Property(o => o.AssemblerId).IsModified = true;
+            entry.Property(o => o.DriverId).IsModified = true;
+            entry.Property(o => o.SyncedWithFimBizAt).IsModified = true;
+            entry.Property(o => o.UpdatedAt).IsModified = true;
+            
             await _context.SaveChangesAsync();
             return order;
         }
