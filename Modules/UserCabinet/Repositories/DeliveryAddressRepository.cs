@@ -73,6 +73,16 @@ public class DeliveryAddressRepository : IDeliveryAddressRepository
         if (address == null)
             return false;
 
+        // Сначала обнуляем ссылки на этот адрес в заказах
+        var ordersWithAddress = await _context.Orders
+            .Where(o => o.DeliveryAddressId == id)
+            .ToListAsync();
+        
+        foreach (var order in ordersWithAddress)
+        {
+            order.DeliveryAddressId = null;
+        }
+
         _context.DeliveryAddresses.Remove(address);
         await _context.SaveChangesAsync();
         return true;

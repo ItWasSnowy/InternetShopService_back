@@ -42,6 +42,19 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
             .WithMany()
             .HasForeignKey(x => x.CounterpartyId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        // Настройка внешних ключей для DeliveryAddress и CargoReceiver
+        // Используем SetNull, чтобы разрешить удаление адресов и грузополучателей
+        // даже если они используются в заказах (в заказах просто установится null)
+        builder.HasOne(x => x.DeliveryAddress)
+            .WithMany()
+            .HasForeignKey(x => x.DeliveryAddressId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        builder.HasOne(x => x.CargoReceiver)
+            .WithMany()
+            .HasForeignKey(x => x.CargoReceiverId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }
 

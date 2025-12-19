@@ -74,6 +74,16 @@ public class CargoReceiverRepository : ICargoReceiverRepository
         if (receiver == null)
             return false;
 
+        // Сначала обнуляем ссылки на этого грузополучателя в заказах
+        var ordersWithReceiver = await _context.Orders
+            .Where(o => o.CargoReceiverId == id)
+            .ToListAsync();
+        
+        foreach (var order in ordersWithReceiver)
+        {
+            order.CargoReceiverId = null;
+        }
+
         _context.CargoReceivers.Remove(receiver);
         await _context.SaveChangesAsync();
         return true;
