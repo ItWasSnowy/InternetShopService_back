@@ -315,9 +315,22 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // Обновляем номер заказа, если он передан от FimBiz
             if (request.HasOrderNumber && !string.IsNullOrEmpty(request.OrderNumber))
             {
-                order.OrderNumber = request.OrderNumber;
-                _logger.LogInformation("Обновлен OrderNumber заказа {OrderId} на {OrderNumber} из NotifyOrderStatusChangeRequest", 
-                    orderId, request.OrderNumber);
+                // Проверяем, не используется ли OrderNumber другим заказом
+                var existingOrderWithSameNumber = await _orderRepository.GetByOrderNumberAsync(request.OrderNumber);
+                if (existingOrderWithSameNumber != null && existingOrderWithSameNumber.Id != order.Id)
+                {
+                    _logger.LogWarning(
+                        "OrderNumber {OrderNumber} уже используется заказом {ExistingOrderId}. " +
+                        "Пропускаем обновление OrderNumber для заказа {OrderId}",
+                        request.OrderNumber, existingOrderWithSameNumber.Id, orderId);
+                    // Не обновляем OrderNumber, если он уже используется другим заказом
+                }
+                else
+                {
+                    order.OrderNumber = request.OrderNumber;
+                    _logger.LogInformation("Обновлен OrderNumber заказа {OrderId} на {OrderNumber} из NotifyOrderStatusChangeRequest", 
+                        orderId, request.OrderNumber);
+                }
             }
             
             order.UpdatedAt = DateTime.UtcNow;
@@ -518,6 +531,51 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                         "=== [ORDER UPDATE] Заказ {OrderId} успешно обновлен (попытка {RetryCount}/{MaxRetries}). " +
                         "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId} ===", 
                         orderId, retryCount + 1, maxRetries, request.ExternalOrderId, request.FimBizOrderId);
+                }
+                catch (Microsoft.EntityFrameworkCore.DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
+                {
+                    // Обработка нарушения уникальности (код 23505)
+                    retryCount++;
+                    
+                    // Проверяем, связано ли это с OrderNumber
+                    if (pgEx.ConstraintName == "IX_Orders_OrderNumber")
+                    {
+                        _logger.LogWarning(ex, 
+                            "=== [UNIQUE CONSTRAINT VIOLATION] Нарушение уникальности OrderNumber для заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). " +
+                            "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, OrderNumber: {OrderNumber}. " +
+                            "Пропускаем обновление OrderNumber и повторяем сохранение. ===", 
+                            orderId, retryCount, maxRetries, request.ExternalOrderId, request.FimBizOrderId, request.OrderNumber);
+                        
+                        // Если OrderNumber был установлен из запроса, сбрасываем его и повторяем сохранение
+                        if (request.HasOrderNumber && !string.IsNullOrEmpty(request.OrderNumber) && order.OrderNumber == request.OrderNumber)
+                        {
+                            // Восстанавливаем старое значение OrderNumber
+                            order.OrderNumber = oldOrderNumber;
+                            _logger.LogInformation(
+                                "=== [UNIQUE CONSTRAINT VIOLATION] Восстановлен предыдущий OrderNumber {OldOrderNumber} для заказа {OrderId} ===",
+                                oldOrderNumber, orderId);
+                            
+                            // Продолжаем цикл для повторной попытки сохранения без обновления OrderNumber
+                            continue;
+                        }
+                    }
+                    
+                    // Если это не связано с OrderNumber или превышено количество попыток, пробрасываем исключение
+                    if (retryCount >= maxRetries)
+                    {
+                        _logger.LogError(ex, 
+                            "=== [UNIQUE CONSTRAINT VIOLATION] Не удалось обновить заказ {OrderId} после {MaxRetries} попыток из-за нарушения уникальности. " +
+                            "ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, Constraint: {ConstraintName} ===", 
+                            orderId, maxRetries, request.ExternalOrderId, request.FimBizOrderId, pgEx.ConstraintName);
+                        throw;
+                    }
+                    
+                    // Для других нарушений уникальности продолжаем попытки
+                    _logger.LogWarning(ex, 
+                        "=== [UNIQUE CONSTRAINT VIOLATION] Нарушение уникальности для заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). " +
+                        "Constraint: {ConstraintName}. Повторяем попытку. ===", 
+                        orderId, retryCount, maxRetries, pgEx.ConstraintName);
+                    continue;
                 }
                 catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
                 {
@@ -1713,6 +1771,84 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
                     await _dbContext.SaveChangesAsync();
                     saveSuccess = true;
+                }
+                catch (Microsoft.EntityFrameworkCore.DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
+                {
+                    // Обработка нарушения уникальности (код 23505)
+                    retryCount++;
+                    
+                    // Проверяем, связано ли это с OrderNumber
+                    if (pgEx.ConstraintName == "IX_Orders_OrderNumber")
+                    {
+                        _logger.LogWarning(ex, 
+                            "Нарушение уникальности OrderNumber при сохранении счета для заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). " +
+                            "Перезагружаем заказ и повторяем сохранение счета. ===", 
+                            order.Id, retryCount, maxRetries);
+                        
+                        if (retryCount >= maxRetries)
+                        {
+                            _logger.LogError(ex, 
+                                "Не удалось сохранить счет для заказа {OrderId} после {MaxRetries} попыток из-за нарушения уникальности OrderNumber. " +
+                                "Возможно, OrderNumber был изменен другим процессом. ===", 
+                                order.Id, maxRetries);
+                            // Не пробрасываем исключение дальше, чтобы не прервать обработку заказа
+                            // Просто логируем ошибку и продолжаем
+                            return;
+                        }
+                        
+                        // Отменяем изменения в текущем контексте
+                        var changedEntries = _dbContext.ChangeTracker.Entries()
+                            .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added 
+                                     || e.State == Microsoft.EntityFrameworkCore.EntityState.Modified 
+                                     || e.State == Microsoft.EntityFrameworkCore.EntityState.Deleted)
+                            .ToList();
+                        foreach (var entry in changedEntries)
+                        {
+                            entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                        }
+                        
+                        // Перезагружаем заказ из БД, чтобы получить актуальное состояние
+                        var reloadedOrder = await _orderRepository.GetByIdAsync(order.Id);
+                        if (reloadedOrder != null)
+                        {
+                            // Обновляем InvoiceId из перезагруженного заказа, если он был установлен
+                            if (reloadedOrder.InvoiceId.HasValue)
+                            {
+                                order.InvoiceId = reloadedOrder.InvoiceId;
+                            }
+                            // Продолжаем цикл для повторной попытки
+                            continue;
+                        }
+                    }
+                    
+                    // Если это не связано с OrderNumber или превышено количество попыток
+                    if (retryCount >= maxRetries)
+                    {
+                        _logger.LogError(ex, 
+                            "Не удалось сохранить счет для заказа {OrderId} после {MaxRetries} попыток из-за нарушения уникальности. " +
+                            "Constraint: {ConstraintName} ===", 
+                            order.Id, maxRetries, pgEx.ConstraintName);
+                        // Не пробрасываем исключение дальше, чтобы не прервать обработку заказа
+                        return;
+                    }
+                    
+                    // Для других нарушений уникальности продолжаем попытки
+                    _logger.LogWarning(ex, 
+                        "Нарушение уникальности при сохранении счета для заказа {OrderId} (попытка {RetryCount}/{MaxRetries}). " +
+                        "Constraint: {ConstraintName}. Повторяем попытку. ===", 
+                        order.Id, retryCount, maxRetries, pgEx.ConstraintName);
+                    
+                    // Отменяем изменения в текущем контексте
+                    var changedEntriesForOther = _dbContext.ChangeTracker.Entries()
+                        .Where(e => e.State == Microsoft.EntityFrameworkCore.EntityState.Added 
+                                 || e.State == Microsoft.EntityFrameworkCore.EntityState.Modified 
+                                 || e.State == Microsoft.EntityFrameworkCore.EntityState.Deleted)
+                        .ToList();
+                    foreach (var entry in changedEntriesForOther)
+                    {
+                        entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                    }
+                    continue;
                 }
                 catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException ex)
                 {

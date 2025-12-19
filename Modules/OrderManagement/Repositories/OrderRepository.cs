@@ -1,6 +1,7 @@
 using InternetShopService_back.Data;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace InternetShopService_back.Modules.OrderManagement.Repositories;
 
@@ -33,6 +34,17 @@ public class OrderRepository : IOrderRepository
             .Include(o => o.Attachments)
             .Include(o => o.StatusHistory)
             .FirstOrDefaultAsync(o => o.FimBizOrderId == fimBizOrderId);
+    }
+
+    public async Task<Order?> GetByOrderNumberAsync(string orderNumber)
+    {
+        return await _context.Orders
+            .Include(o => o.Items)
+            .Include(o => o.DeliveryAddress)
+            .Include(o => o.CargoReceiver)
+            .Include(o => o.Attachments)
+            .Include(o => o.StatusHistory)
+            .FirstOrDefaultAsync(o => o.OrderNumber == orderNumber);
     }
 
     public async Task<List<Order>> GetByUserIdAsync(Guid userId)
@@ -162,7 +174,23 @@ public class OrderRepository : IOrderRepository
                 }
             }
             
-            await _context.SaveChangesAsync();
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex) when (ex.InnerException is PostgresException pgEx && pgEx.SqlState == "23505")
+            {
+                // Обработка нарушения уникальности
+                if (pgEx.ConstraintName == "IX_Orders_OrderNumber")
+                {
+                    throw new DbUpdateException(
+                        $"Нарушение уникальности OrderNumber: номер заказа '{order.OrderNumber}' уже используется другим заказом. " +
+                        $"Constraint: {pgEx.ConstraintName}",
+                        ex);
+                }
+                throw;
+            }
+            
             return existingOrder;
         }
         else
@@ -237,7 +265,23 @@ public class OrderRepository : IOrderRepository
                 }
             }
             
-            await _context.SaveChangesAsync();
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex) when (ex.InnerException is PostgresException pgEx && pgEx.SqlState == "23505")
+            {
+                // Обработка нарушения уникальности
+                if (pgEx.ConstraintName == "IX_Orders_OrderNumber")
+                {
+                    throw new DbUpdateException(
+                        $"Нарушение уникальности OrderNumber: номер заказа '{order.OrderNumber}' уже используется другим заказом. " +
+                        $"Constraint: {pgEx.ConstraintName}",
+                        ex);
+                }
+                throw;
+            }
+            
             return order;
         }
     }
