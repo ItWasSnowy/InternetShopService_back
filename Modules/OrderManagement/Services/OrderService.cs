@@ -596,6 +596,9 @@ public class OrderService : IOrderService
                 createOrderRequest.OrganizationId = shop.FimBizOrganizationId.Value;
             }
 
+            // НЕ передаем order_number - FimBiz всегда должен генерировать свой номер заказа
+            // После получения ответа от FimBiz мы обновим order.OrderNumber значением от FimBiz
+
             // Добавляем позиции заказа
             foreach (var item in order.Items)
             {

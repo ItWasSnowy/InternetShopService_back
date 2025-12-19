@@ -299,6 +299,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             var oldStatus = order.Status;
             var oldTotalAmount = order.TotalAmount;
             var oldTrackingNumber = order.TrackingNumber;
+            var oldOrderNumber = order.OrderNumber;
             var oldIsPriority = order.IsPriority;
             var oldIsLongAssembling = order.IsLongAssembling;
             var oldFimBizOrderId = order.FimBizOrderId;
@@ -310,6 +311,15 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // Обновляем статус заказа (ВСЕГДА обновляем, даже если статус не изменился)
             order.Status = newStatus;
             order.FimBizOrderId = request.FimBizOrderId;
+            
+            // Обновляем номер заказа, если он передан от FimBiz
+            if (request.HasOrderNumber && !string.IsNullOrEmpty(request.OrderNumber))
+            {
+                order.OrderNumber = request.OrderNumber;
+                _logger.LogInformation("Обновлен OrderNumber заказа {OrderId} на {OrderNumber} из NotifyOrderStatusChangeRequest", 
+                    orderId, request.OrderNumber);
+            }
+            
             order.UpdatedAt = DateTime.UtcNow;
 
             _logger.LogInformation("Обновление статуса заказа {OrderId} с {OldStatus} на {NewStatus} (FimBiz: {GrpcStatus})", 
@@ -401,6 +411,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // Проверяем, были ли реальные изменения (кроме статуса)
             bool hasOtherChanges = oldTotalAmount != order.TotalAmount
                 || oldTrackingNumber != order.TrackingNumber
+                || oldOrderNumber != order.OrderNumber
                 || oldIsPriority != order.IsPriority
                 || oldIsLongAssembling != order.IsLongAssembling
                 || oldFimBizOrderId != order.FimBizOrderId

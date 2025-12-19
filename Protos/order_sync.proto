@@ -49,6 +49,7 @@ message CreateOrderRequest {
   map<string, string> metadata = 9;      // Дополнительные метаданные
 
   repeated AttachedFile attached_files = 10; // Прикрепленные файлы из интернет-магазина
+  optional string order_number = 11;     // Номер заказа из интернет-магазина (если передан, используется вместо генерации)
 
 }
 
