@@ -383,12 +383,26 @@ public class OrderService : IOrderService
             }).ToList(),
             StatusHistory = statusHistory
                 .OrderBy(h => h.ChangedAt)
-                .Select(h => new OrderStatusHistoryDto
+                .Select(h =>
                 {
-                    Status = h.Status,
-                    StatusName = GetStatusName(h.Status),
-                    ChangedAt = h.ChangedAt,
-                    Comment = h.Comment
+                    // Логирование для отладки чтения времени из БД
+                    _logger.LogDebug(
+                        "🔍 [TIME DEBUG] Reading StatusHistory from DB. " +
+                        "ChangedAt: {ChangedAt}, " +
+                        "DateTime.Kind: {Kind}, " +
+                        "OrderId: {OrderId}, Status: {Status}",
+                        h.ChangedAt,
+                        h.ChangedAt.Kind,
+                        order.Id,
+                        h.Status);
+                    
+                    return new OrderStatusHistoryDto
+                    {
+                        Status = h.Status,
+                        StatusName = GetStatusName(h.Status),
+                        ChangedAt = h.ChangedAt,
+                        Comment = h.Comment
+                    };
                 }).ToList()
         };
 

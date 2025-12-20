@@ -440,6 +440,19 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 ? DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt).UtcDateTime 
                 : DateTime.UtcNow;
             
+            // Логирование для отладки конвертации времени
+            _logger.LogInformation(
+                "🔍 [TIME DEBUG] StatusChangedAt conversion. " +
+                "UnixTimestamp: {UnixTimestamp}, " +
+                "Converted UTC DateTime: {UtcDateTime}, " +
+                "DateTime.Kind: {Kind}, " +
+                "OrderId: {OrderId}, Status: {Status}",
+                request.StatusChangedAt,
+                statusChangedAt,
+                statusChangedAt.Kind,
+                orderId,
+                newStatus);
+            
             bool isDuplicate = false;
             
             // Проверяем последнюю запись в истории статусов для этого заказа
@@ -1119,14 +1132,29 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             // Добавляем запись в историю статусов только если статус изменился
             if (oldStatus != order.Status)
             {
+                var changedAt = request.Order.StatusChangedAt > 0 
+                    ? DateTimeOffset.FromUnixTimeSeconds(request.Order.StatusChangedAt).UtcDateTime 
+                    : DateTime.UtcNow;
+                
+                // Логирование для отладки конвертации времени
+                _logger.LogInformation(
+                    "🔍 [TIME DEBUG] NotifyOrderUpdate StatusChangedAt conversion. " +
+                    "UnixTimestamp: {UnixTimestamp}, " +
+                    "Converted UTC DateTime: {UtcDateTime}, " +
+                    "DateTime.Kind: {Kind}, " +
+                    "OrderId: {OrderId}, Status: {Status}",
+                    request.Order.StatusChangedAt,
+                    changedAt,
+                    changedAt.Kind,
+                    order.Id,
+                    order.Status);
+                
                 var statusHistory = new OrderStatusHistory
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order.Id,
                     Status = order.Status,
-                    ChangedAt = request.Order.StatusChangedAt > 0 
-                        ? DateTimeOffset.FromUnixTimeSeconds(request.Order.StatusChangedAt).UtcDateTime 
-                        : DateTime.UtcNow
+                    ChangedAt = changedAt
                 };
                 order.StatusHistory.Add(statusHistory);
             }
@@ -1283,14 +1311,30 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             }
 
             // Добавляем начальную запись в историю статусов
+            var initialChangedAt = grpcOrder.StatusChangedAt > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(grpcOrder.StatusChangedAt).UtcDateTime
+                : order.CreatedAt;
+            
+            // Логирование для отладки конвертации времени
+            _logger.LogInformation(
+                "🔍 [TIME DEBUG] CreateOrderFromFimBiz initialStatusHistory. " +
+                "UnixTimestamp: {UnixTimestamp}, " +
+                "Converted UTC DateTime: {UtcDateTime}, " +
+                "DateTime.Kind: {Kind}, " +
+                "OrderId: {OrderId}, Status: {Status}, OrderCreatedAt: {OrderCreatedAt}",
+                grpcOrder.StatusChangedAt,
+                initialChangedAt,
+                initialChangedAt.Kind,
+                order.Id,
+                order.Status,
+                order.CreatedAt);
+            
             var initialStatusHistory = new OrderStatusHistory
             {
                 Id = Guid.NewGuid(),
                 OrderId = order.Id,
                 Status = order.Status,
-                ChangedAt = grpcOrder.StatusChangedAt > 0
-                    ? DateTimeOffset.FromUnixTimeSeconds(grpcOrder.StatusChangedAt).UtcDateTime
-                    : order.CreatedAt
+                ChangedAt = initialChangedAt
             };
             order.StatusHistory.Add(initialStatusHistory);
 
@@ -1506,15 +1550,31 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             }
 
             // Добавляем начальную запись в историю статусов
+            var initialChangedAt = request.StatusChangedAt > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt).UtcDateTime
+                : order.CreatedAt;
+            
+            // Логирование для отладки конвертации времени
+            _logger.LogInformation(
+                "🔍 [TIME DEBUG] CreateOrder initialStatusHistory. " +
+                "UnixTimestamp: {UnixTimestamp}, " +
+                "Converted UTC DateTime: {UtcDateTime}, " +
+                "DateTime.Kind: {Kind}, " +
+                "OrderId: {OrderId}, Status: {Status}, OrderCreatedAt: {OrderCreatedAt}",
+                request.StatusChangedAt,
+                initialChangedAt,
+                initialChangedAt.Kind,
+                order.Id,
+                order.Status,
+                order.CreatedAt);
+            
             var initialStatusHistory = new OrderStatusHistory
             {
                 Id = Guid.NewGuid(),
                 OrderId = order.Id,
                 Status = order.Status,
                 Comment = request.HasComment && !string.IsNullOrEmpty(request.Comment) ? request.Comment : null,
-                ChangedAt = request.StatusChangedAt > 0
-                    ? DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt).UtcDateTime
-                    : order.CreatedAt
+                ChangedAt = initialChangedAt
             };
             order.StatusHistory.Add(initialStatusHistory);
 

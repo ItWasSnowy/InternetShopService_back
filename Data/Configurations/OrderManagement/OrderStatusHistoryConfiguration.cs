@@ -15,6 +15,12 @@ public class OrderStatusHistoryConfiguration : IEntityTypeConfiguration<OrderSta
         builder.Property(x => x.Comment)
             .HasMaxLength(1000);
 
+        // Явно указываем, что ChangedAt должен храниться и читаться как UTC
+        builder.Property(x => x.ChangedAt)
+            .HasConversion(
+                v => v.Kind == DateTimeKind.Utc ? v : v.ToUniversalTime(),
+                v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+
         builder.HasIndex(x => x.OrderId);
         builder.HasIndex(x => x.ChangedAt);
 
