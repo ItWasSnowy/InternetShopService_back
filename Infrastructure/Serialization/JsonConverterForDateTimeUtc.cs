@@ -36,7 +36,22 @@ public class JsonConverterForDateTimeUtc : JsonConverter<DateTime>
     public override void Write(Utf8JsonWriter writer, DateTime value, JsonSerializerOptions options)
     {
         // Всегда конвертируем в UTC и сериализуем в ISO 8601 формате с Z в конце
-        var utcValue = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+        DateTime utcValue;
+        if (value.Kind == DateTimeKind.Utc)
+        {
+            utcValue = value;
+        }
+        else if (value.Kind == DateTimeKind.Unspecified)
+        {
+            // Entity Framework возвращает DateTime с Kind=Unspecified из PostgreSQL timestamp with time zone
+            // Предполагаем, что это уже UTC время (так как в БД хранится UTC)
+            utcValue = DateTime.SpecifyKind(value, DateTimeKind.Utc);
+        }
+        else
+        {
+            // DateTimeKind.Local - конвертируем в UTC
+            utcValue = value.ToUniversalTime();
+        }
         writer.WriteStringValue(utcValue.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"));
     }
 }
