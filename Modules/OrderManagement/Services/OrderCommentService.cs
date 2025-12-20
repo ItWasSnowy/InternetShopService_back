@@ -1,14 +1,17 @@
+using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
 using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using GrpcOrderComment = InternetShopService_back.Infrastructure.Grpc.Orders.OrderComment;
 using GrpcAttachedFile = InternetShopService_back.Infrastructure.Grpc.Orders.AttachedFile;
 using LocalOrderComment = InternetShopService_back.Modules.OrderManagement.Models.OrderComment;
+using LocalOrder = InternetShopService_back.Modules.OrderManagement.Models.Order;
 
 namespace InternetShopService_back.Modules.OrderManagement.Services;
 
@@ -48,6 +51,24 @@ public class OrderCommentService : IOrderCommentService
         {
             throw new UnauthorizedAccessException("Заказ не принадлежит текущему пользователю");
         }
+
+        // ✅ КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Перезагружаем заказ из БД для получения актуальных данных
+        // Это решает проблему кэширования Entity Framework, когда FimBizOrderId может быть обновлен
+        // в другом контексте после отправки заказа в FimBiz, но текущий контекст содержит устаревшие данные
+        _logger.LogDebug("Перезагружаем заказ {OrderId} для получения актуальных данных перед созданием комментария", dto.OrderId);
+        
+        // Простое решение: делаем новый запрос к БД для получения свежих данных
+        var freshOrder = await _orderRepository.GetByIdAsync(dto.OrderId);
+        if (freshOrder != null)
+        {
+            // Обновляем критические поля из свежих данных
+            order.FimBizOrderId = freshOrder.FimBizOrderId;
+            order.SyncedWithFimBizAt = freshOrder.SyncedWithFimBizAt;
+            order.OrderNumber = freshOrder.OrderNumber;
+        }
+
+        _logger.LogInformation("Создание комментария для заказа {OrderId}. Актуальные данные: FimBizOrderId={FimBizOrderId}, SyncedWithFimBizAt={SyncedWithFimBizAt}, CreatedAt={CreatedAt}", 
+            order.Id, order.FimBizOrderId, order.SyncedWithFimBizAt, order.CreatedAt);
 
         // Генерируем уникальный ID для комментария
         var externalCommentId = Guid.NewGuid().ToString();
@@ -89,93 +110,41 @@ public class OrderCommentService : IOrderCommentService
         {
             if (order.FimBizOrderId.HasValue)
             {
-                // Определяем правильный ExternalOrderId
-                // Ключевое различие:
-                // - Заказ из FimBiz: FimBizOrderId устанавливается ПРИ СОЗДАНИИ заказа
-                // - Заказ из интернет-магазина: FimBizOrderId устанавливается ПОСЛЕ отправки в FimBiz
-                //
-                // Проверяем: если заказ был создан с FimBizOrderId сразу (CreatedAt и SyncedWithFimBizAt близки),
-                // значит заказ из FimBiz. Иначе - из интернет-магазина.
-                //
-                // Более надежный способ: если разница между CreatedAt и SyncedWithFimBizAt очень мала (< 2 секунд),
-                // значит заказ создан из FimBiz (оба поля устанавливаются одновременно).
-
-                string externalOrderId;
-                if (order.SyncedWithFimBizAt.HasValue &&
-                    order.CreatedAt <= order.SyncedWithFimBizAt.Value &&
-                    (order.SyncedWithFimBizAt.Value - order.CreatedAt).TotalSeconds < 2)
-                {
-                    // Заказ создан в FimBiz - используем "FIMBIZ-{FimBizOrderId}"
-                    externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
-                    _logger.LogDebug("Заказ {OrderId} создан в FimBiz, используем ExternalOrderId: {ExternalOrderId}", 
-                        order.Id, externalOrderId);
-                }
-                else
-                {
-                    // Заказ создан у нас и синхронизирован - используем наш Guid
-                    externalOrderId = order.Id.ToString();
-                    _logger.LogDebug("Заказ {OrderId} создан в интернет-магазине, используем ExternalOrderId: {ExternalOrderId}", 
-                        order.Id, externalOrderId);
-                }
-
-                var grpcComment = new GrpcOrderComment
-                {
-                    CommentId = externalCommentId,
-                    ExternalOrderId = externalOrderId,  // ✅ Правильный ExternalOrderId
-                    FimBizOrderId = order.FimBizOrderId.Value,
-                    CommentText = dto.CommentText,
-                    CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-                    AuthorName = dto.AuthorName ?? string.Empty,
-                    IsFromInternetShop = true
-                };
-
-                // Добавляем прикрепленные файлы в gRPC сообщение
-                foreach (var attachment in comment.Attachments)
-                {
-                    grpcComment.AttachedFiles.Add(new GrpcAttachedFile
-                    {
-                        FileName = attachment.FileName,
-                        ContentType = attachment.ContentType,
-                        Url = attachment.FileUrl
-                    });
-                }
-
-                var request = new CreateCommentRequest
-                {
-                    Comment = grpcComment
-                };
-
-                var response = await _fimBizGrpcClient.CreateCommentAsync(request);
-                if (!response.Success)
-                {
-                    // Обработка дублирования комментария
-                    if (response.Message != null && 
-                        (response.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
-                         response.Message.Contains("уже существует", StringComparison.OrdinalIgnoreCase) ||
-                         response.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
-                         response.Message.Contains("дубликат", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        _logger.LogInformation(
-                            "Комментарий {CommentId} уже существует в FimBiz (дублирование). Это нормально при повторной отправке. ExternalOrderId: {ExternalOrderId}, Message: {Message}",
-                            externalCommentId, externalOrderId, response.Message);
-                    }
-                    else
-                    {
-                        _logger.LogWarning(
-                            "Не удалось отправить комментарий {CommentId} в FimBiz. ExternalOrderId: {ExternalOrderId}, Message: {Message}", 
-                            externalCommentId, externalOrderId, response.Message);
-                    }
-                }
-                else
-                {
-                    _logger.LogInformation(
-                        "Комментарий {CommentId} успешно отправлен в FimBiz. ExternalOrderId: {ExternalOrderId}", 
-                        externalCommentId, externalOrderId);
-                }
+                await SendCommentToFimBizAsync(order, comment, externalCommentId, dto.CommentText, dto.AuthorName);
             }
             else
             {
-                _logger.LogWarning("Заказ {OrderId} не синхронизирован с FimBiz, комментарий не будет отправлен", order.Id);
+                _logger.LogWarning("Заказ {OrderId} не синхронизирован с FimBiz, комментарий не будет отправлен. FimBizOrderId={FimBizOrderId}, SyncedWithFimBizAt={SyncedWithFimBizAt}", 
+                    order.Id, order.FimBizOrderId, order.SyncedWithFimBizAt);
+                    
+                // 🔥 ФИНАЛЬНАЯ ПОПЫТКА: Если заказ был недавно создан, ждем немного и проверяем еще раз
+                if (order.SyncedWithFimBizAt == null && (DateTime.UtcNow - order.CreatedAt).TotalSeconds < 10)
+                {
+                    _logger.LogInformation("Заказ {OrderId} создан недавно ({CreatedSecondsAgo} сек назад). Делаем финальную попытку получить актуальные данные через 2 секунды...", 
+                        order.Id, (DateTime.UtcNow - order.CreatedAt).TotalSeconds);
+                        
+                    await Task.Delay(2000); // Ждем 2 секунды
+                    
+                    // Последняя попытка получить актуальные данные
+                    var finalOrder = await _orderRepository.GetByIdAsync(dto.OrderId);
+                    if (finalOrder != null && finalOrder.FimBizOrderId.HasValue)
+                    {
+                        _logger.LogInformation("🎉 УСПЕХ! Заказ {OrderId} теперь синхронизирован. FimBizOrderId={FimBizOrderId}. Отправляем комментарий...", 
+                            finalOrder.Id, finalOrder.FimBizOrderId);
+                            
+                        // Обновляем данные заказа
+                        order.FimBizOrderId = finalOrder.FimBizOrderId;
+                        order.SyncedWithFimBizAt = finalOrder.SyncedWithFimBizAt;
+                        order.OrderNumber = finalOrder.OrderNumber;
+                        
+                        // Рекурсивно вызываем отправку комментария
+                        await SendCommentToFimBizAsync(order, comment, externalCommentId, dto.CommentText, dto.AuthorName);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("❌ Заказ {OrderId} все еще не синхронизирован после ожидания. Комментарий будет отправлен позже через SendUnsentCommentsToFimBizAsync", order.Id);
+                    }
+                }
             }
         }
         catch (Exception ex)
@@ -359,9 +328,13 @@ public class OrderCommentService : IOrderCommentService
         var order = await _orderRepository.GetByIdAsync(orderId);
         if (order == null || !order.FimBizOrderId.HasValue)
         {
-            _logger.LogDebug("Заказ {OrderId} не найден или не синхронизирован с FimBiz, пропускаем отправку комментариев", orderId);
+            _logger.LogInformation("Заказ {OrderId} не найден или не синхронизирован с FimBiz, пропускаем отправку комментариев. Order found: {OrderFound}, FimBizOrderId: {FimBizOrderId}", 
+                orderId, order != null, order?.FimBizOrderId);
             return;
         }
+        
+        _logger.LogInformation("🔄 Начинаем отправку неотправленных комментариев для заказа {OrderId}. FimBizOrderId: {FimBizOrderId}, SyncedWithFimBizAt: {SyncedWithFimBizAt}", 
+            order.Id, order.FimBizOrderId, order.SyncedWithFimBizAt);
 
         // Получаем все комментарии заказа, созданные в интернет-магазине
         var comments = await _commentRepository.GetByOrderIdAsync(orderId);
@@ -463,6 +436,100 @@ public class OrderCommentService : IOrderCommentService
         _logger.LogInformation(
             "Отправка комментариев для заказа {OrderId} завершена. Отправлено: {SentCount}, Пропущено (дубликаты): {SkippedCount}, Всего: {TotalCount}",
             orderId, sentCount, skippedCount, unsentComments.Count);
+    }
+
+    /// <summary>
+    /// Вспомогательный метод для отправки комментария в FimBiz
+    /// </summary>
+    private async Task SendCommentToFimBizAsync(LocalOrder order, LocalOrderComment comment, string externalCommentId, string commentText, string? authorName)
+    {
+        if (!order.FimBizOrderId.HasValue)
+        {
+            _logger.LogWarning("Невозможно отправить комментарий {CommentId}: заказ {OrderId} не имеет FimBizOrderId", externalCommentId, order.Id);
+            return;
+        }
+
+        // Определяем правильный ExternalOrderId
+        string externalOrderId;
+        if (order.SyncedWithFimBizAt.HasValue &&
+            order.CreatedAt <= order.SyncedWithFimBizAt.Value &&
+            (order.SyncedWithFimBizAt.Value - order.CreatedAt).TotalSeconds < 2)
+        {
+            // Заказ создан в FimBiz
+            externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
+            _logger.LogDebug("Заказ {OrderId} создан в FimBiz, используем ExternalOrderId: {ExternalOrderId}", 
+                order.Id, externalOrderId);
+        }
+        else
+        {
+            // Заказ создан в интернет-магазине
+            externalOrderId = order.Id.ToString();
+            _logger.LogDebug("Заказ {OrderId} создан в интернет-магазине, используем ExternalOrderId: {ExternalOrderId}", 
+                order.Id, externalOrderId);
+        }
+
+        var grpcComment = new GrpcOrderComment
+        {
+            CommentId = externalCommentId,
+            ExternalOrderId = externalOrderId,
+            FimBizOrderId = order.FimBizOrderId.Value,
+            CommentText = commentText,
+            CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            AuthorName = authorName ?? string.Empty,
+            IsFromInternetShop = true
+        };
+
+        // Добавляем прикрепленные файлы
+        foreach (var attachment in comment.Attachments)
+        {
+            grpcComment.AttachedFiles.Add(new GrpcAttachedFile
+            {
+                FileName = attachment.FileName,
+                ContentType = attachment.ContentType,
+                Url = attachment.FileUrl
+            });
+        }
+
+        var request = new CreateCommentRequest
+        {
+            Comment = grpcComment
+        };
+
+        try
+        {
+            var response = await _fimBizGrpcClient.CreateCommentAsync(request);
+            if (!response.Success)
+            {
+                // Обработка дублирования комментария
+                if (response.Message != null && 
+                    (response.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
+                     response.Message.Contains("уже существует", StringComparison.OrdinalIgnoreCase) ||
+                     response.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
+                     response.Message.Contains("дубликат", StringComparison.OrdinalIgnoreCase)))
+                {
+                    _logger.LogInformation(
+                        "Комментарий {CommentId} уже существует в FimBiz (дублирование). ExternalOrderId: {ExternalOrderId}, Message: {Message}",
+                        externalCommentId, externalOrderId, response.Message);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Не удалось отправить комментарий {CommentId} в FimBiz. ExternalOrderId: {ExternalOrderId}, Message: {Message}", 
+                        externalCommentId, externalOrderId, response.Message);
+                }
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "🎉 Комментарий {CommentId} успешно отправлен в FimBiz. ExternalOrderId: {ExternalOrderId}", 
+                    externalCommentId, externalOrderId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при отправке комментария {CommentId} в FimBiz", externalCommentId);
+            throw;
+        }
     }
 
     private static OrderCommentDto MapToDto(LocalOrderComment comment)
