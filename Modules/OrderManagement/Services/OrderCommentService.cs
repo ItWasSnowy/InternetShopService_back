@@ -89,10 +89,39 @@ public class OrderCommentService : IOrderCommentService
         {
             if (order.FimBizOrderId.HasValue)
             {
+                // Определяем правильный ExternalOrderId
+                // Ключевое различие:
+                // - Заказ из FimBiz: FimBizOrderId устанавливается ПРИ СОЗДАНИИ заказа
+                // - Заказ из интернет-магазина: FimBizOrderId устанавливается ПОСЛЕ отправки в FimBiz
+                //
+                // Проверяем: если заказ был создан с FimBizOrderId сразу (CreatedAt и SyncedWithFimBizAt близки),
+                // значит заказ из FimBiz. Иначе - из интернет-магазина.
+                //
+                // Более надежный способ: если разница между CreatedAt и SyncedWithFimBizAt очень мала (< 2 секунд),
+                // значит заказ создан из FimBiz (оба поля устанавливаются одновременно).
+
+                string externalOrderId;
+                if (order.SyncedWithFimBizAt.HasValue &&
+                    order.CreatedAt <= order.SyncedWithFimBizAt.Value &&
+                    (order.SyncedWithFimBizAt.Value - order.CreatedAt).TotalSeconds < 2)
+                {
+                    // Заказ создан в FimBiz - используем "FIMBIZ-{FimBizOrderId}"
+                    externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
+                    _logger.LogDebug("Заказ {OrderId} создан в FimBiz, используем ExternalOrderId: {ExternalOrderId}", 
+                        order.Id, externalOrderId);
+                }
+                else
+                {
+                    // Заказ создан у нас и синхронизирован - используем наш Guid
+                    externalOrderId = order.Id.ToString();
+                    _logger.LogDebug("Заказ {OrderId} создан в интернет-магазине, используем ExternalOrderId: {ExternalOrderId}", 
+                        order.Id, externalOrderId);
+                }
+
                 var grpcComment = new GrpcOrderComment
                 {
                     CommentId = externalCommentId,
-                    ExternalOrderId = order.Id.ToString(),
+                    ExternalOrderId = externalOrderId,  // ✅ Правильный ExternalOrderId
                     FimBizOrderId = order.FimBizOrderId.Value,
                     CommentText = dto.CommentText,
                     CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
@@ -119,11 +148,29 @@ public class OrderCommentService : IOrderCommentService
                 var response = await _fimBizGrpcClient.CreateCommentAsync(request);
                 if (!response.Success)
                 {
-                    _logger.LogWarning("Не удалось отправить комментарий в FimBiz: {Message}", response.Message);
+                    // Обработка дублирования комментария
+                    if (response.Message != null && 
+                        (response.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("уже существует", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("дубликат", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _logger.LogInformation(
+                            "Комментарий {CommentId} уже существует в FimBiz (дублирование). Это нормально при повторной отправке. ExternalOrderId: {ExternalOrderId}, Message: {Message}",
+                            externalCommentId, externalOrderId, response.Message);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Не удалось отправить комментарий {CommentId} в FimBiz. ExternalOrderId: {ExternalOrderId}, Message: {Message}", 
+                            externalCommentId, externalOrderId, response.Message);
+                    }
                 }
                 else
                 {
-                    _logger.LogInformation("Комментарий {CommentId} успешно отправлен в FimBiz", externalCommentId);
+                    _logger.LogInformation(
+                        "Комментарий {CommentId} успешно отправлен в FimBiz. ExternalOrderId: {ExternalOrderId}", 
+                        externalCommentId, externalOrderId);
                 }
             }
             else
