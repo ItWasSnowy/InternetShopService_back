@@ -402,7 +402,7 @@ public class OrderCommentService : IOrderCommentService
                     ExternalOrderId = externalOrderId,
                     FimBizOrderId = order.FimBizOrderId.Value,
                     CommentText = comment.CommentText,
-                    CreatedAt = ((DateTimeOffset)comment.CreatedAt).ToUnixTimeSeconds(),
+                    CreatedAt = new DateTimeOffset(DateTime.SpecifyKind(comment.CreatedAt, DateTimeKind.Utc), TimeSpan.Zero).ToUnixTimeSeconds(),
                     AuthorName = comment.AuthorName ?? string.Empty,
                     IsFromInternetShop = true
                 };
