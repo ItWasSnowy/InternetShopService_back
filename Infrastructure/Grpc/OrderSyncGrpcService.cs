@@ -1735,38 +1735,90 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             {
                 try
                 {
+                    // 🔥 ИСПРАВЛЕНИЕ ДУБЛИРОВАНИЯ: Отсоединяем все отслеживаемые сущности перед проверкой
+                    // Это предотвращает конфликты при параллельной обработке
+                    var trackedInvoices = _dbContext.ChangeTracker.Entries<Invoice>()
+                        .Where(e => e.Entity.OrderId == order.Id)
+                        .ToList();
+                    foreach (var entry in trackedInvoices)
+                    {
+                        entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                    }
+
                     // Проверяем, существует ли уже счет для этого заказа
+                    // Используем AsNoTracking для избежания конфликтов отслеживания
                     var existingInvoice = await _dbContext.Invoices
+                        .AsNoTracking()
                         .FirstOrDefaultAsync(i => i.OrderId == order.Id);
 
                     isNewInvoice = existingInvoice == null;
 
                     if (existingInvoice != null)
                     {
-                        // Обновляем существующий счет - только URL
-                        existingInvoice.PdfUrl = pdfUrl;
-                        existingInvoice.UpdatedAt = DateTime.UtcNow;
-
-                        _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
-                            order.Id, existingInvoice.Id, pdfUrl ?? "не указан");
-                    }
-                    else
-                    {
-                        // Создаем новый счет - только с URL
-                        var invoice = new Invoice
+                        // Обновляем существующий счет - загружаем его заново для обновления
+                        var invoiceToUpdate = await _dbContext.Invoices
+                            .FirstOrDefaultAsync(i => i.Id == existingInvoice.Id);
+                        
+                        if (invoiceToUpdate != null)
                         {
-                            Id = Guid.NewGuid(),
-                            OrderId = order.Id,
-                            PdfUrl = pdfUrl,
-                            CreatedAt = DateTime.UtcNow,
-                            UpdatedAt = DateTime.UtcNow
-                        };
+                            invoiceToUpdate.PdfUrl = pdfUrl;
+                            invoiceToUpdate.UpdatedAt = DateTime.UtcNow;
+                            order.InvoiceId = invoiceToUpdate.Id;
 
-                        await _dbContext.Invoices.AddAsync(invoice);
-                        order.InvoiceId = invoice.Id;
+                            _logger.LogInformation("Обновлен счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
+                                order.Id, invoiceToUpdate.Id, pdfUrl ?? "не указан");
+                        }
+                        else
+                        {
+                            // Счет был удален между проверкой и обновлением - создаем новый
+                            _logger.LogWarning("Счет {InvoiceId} был удален между проверкой и обновлением. Создаем новый счет для заказа {OrderId}",
+                                existingInvoice.Id, order.Id);
+                            isNewInvoice = true;
+                        }
+                    }
 
-                        _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
-                            order.Id, invoice.Id, pdfUrl ?? "не указан");
+                    if (isNewInvoice)
+                    {
+                        // Проверяем еще раз перед созданием, чтобы избежать race condition
+                        var doubleCheckInvoice = await _dbContext.Invoices
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(i => i.OrderId == order.Id);
+                        
+                        if (doubleCheckInvoice != null)
+                        {
+                            // Счет был создан другим потоком - обновляем его
+                            var invoiceToUpdate = await _dbContext.Invoices
+                                .FirstOrDefaultAsync(i => i.Id == doubleCheckInvoice.Id);
+                            
+                            if (invoiceToUpdate != null)
+                            {
+                                invoiceToUpdate.PdfUrl = pdfUrl;
+                                invoiceToUpdate.UpdatedAt = DateTime.UtcNow;
+                                order.InvoiceId = invoiceToUpdate.Id;
+                                isNewInvoice = false;
+
+                                _logger.LogInformation("Счет для заказа {OrderId} был создан другим потоком. Обновляем его. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}",
+                                    order.Id, invoiceToUpdate.Id, pdfUrl ?? "не указан");
+                            }
+                        }
+                        else
+                        {
+                            // Создаем новый счет - только с URL
+                            var invoice = new Invoice
+                            {
+                                Id = Guid.NewGuid(),
+                                OrderId = order.Id,
+                                PdfUrl = pdfUrl,
+                                CreatedAt = DateTime.UtcNow,
+                                UpdatedAt = DateTime.UtcNow
+                            };
+
+                            await _dbContext.Invoices.AddAsync(invoice);
+                            order.InvoiceId = invoice.Id;
+
+                            _logger.LogInformation("Создан новый счет для заказа {OrderId}. InvoiceId: {InvoiceId}, PdfUrl: {PdfUrl}", 
+                                order.Id, invoice.Id, pdfUrl ?? "не указан");
+                        }
                     }
 
                     await _dbContext.SaveChangesAsync();
@@ -2063,15 +2115,36 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     {
         try
         {
-            // Загружаем существующие позиции заказа
-            await _dbContext.Entry(order).Collection(o => o.Items).LoadAsync();
+            // 🔥 ИСПРАВЛЕНИЕ EF TRACKING: Отсоединяем все отслеживаемые OrderItems перед операцией
+            // Это предотвращает конфликты "instance already being tracked"
+            var trackedItems = _dbContext.ChangeTracker.Entries<LocalOrderItem>()
+                .Where(e => e.Entity.OrderId == order.Id)
+                .ToList();
+            foreach (var entry in trackedItems)
+            {
+                entry.State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+            }
 
-            // Для простоты удаляем все старые позиции и создаем новые
-            // В реальном приложении может потребоваться более сложная логика сравнения
-            var existingItems = order.Items.ToList();
-            _dbContext.OrderItems.RemoveRange(existingItems);
+            // Загружаем существующие позиции заказа с AsNoTracking для избежания конфликтов
+            var existingItems = await _dbContext.OrderItems
+                .AsNoTracking()
+                .Where(i => i.OrderId == order.Id)
+                .ToListAsync();
+
+            // Удаляем старые позиции (если они есть)
+            if (existingItems.Any())
+            {
+                // Загружаем для удаления
+                var itemsToDelete = await _dbContext.OrderItems
+                    .Where(i => i.OrderId == order.Id)
+                    .ToListAsync();
+                
+                _dbContext.OrderItems.RemoveRange(itemsToDelete);
+                await _dbContext.SaveChangesAsync();
+            }
 
             // Создаем новые позиции из gRPC данных
+            var newItems = new List<LocalOrderItem>();
             foreach (var grpcItem in grpcItems)
             {
                 var orderItem = new LocalOrderItem
@@ -2090,9 +2163,11 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     CreatedAt = DateTime.UtcNow
                 };
 
-                await _dbContext.OrderItems.AddAsync(orderItem);
+                newItems.Add(orderItem);
             }
 
+            // Добавляем все новые позиции одной операцией
+            await _dbContext.OrderItems.AddRangeAsync(newItems);
             await _dbContext.SaveChangesAsync();
 
             _logger.LogInformation("Синхронизировано {Count} позиций для заказа {OrderId}", 

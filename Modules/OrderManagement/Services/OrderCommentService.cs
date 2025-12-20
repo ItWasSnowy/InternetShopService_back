@@ -110,6 +110,32 @@ public class OrderCommentService : IOrderCommentService
         {
             if (order.FimBizOrderId.HasValue)
             {
+                // 🔥 ИСПРАВЛЕНИЕ RACE CONDITION: Если заказ только что синхронизирован (< 5 секунд),
+                // добавляем задержку перед отправкой первого комментария, чтобы FimBiz успел обработать заказ
+                if (order.SyncedWithFimBizAt.HasValue)
+                {
+                    var timeSinceSync = (DateTime.UtcNow - order.SyncedWithFimBizAt.Value).TotalSeconds;
+                    if (timeSinceSync < 5)
+                    {
+                        var delaySeconds = 3; // Задержка 3 секунды для первого комментария
+                        _logger.LogInformation(
+                            "Заказ {OrderId} синхронизирован недавно ({TimeSinceSync:F1} сек назад). " +
+                            "Добавляем задержку {DelaySeconds} сек перед отправкой первого комментария, чтобы FimBiz успел обработать заказ.",
+                            order.Id, timeSinceSync, delaySeconds);
+                        
+                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                        
+                        // Перезагружаем заказ для получения актуальных данных
+                        var refreshedOrder = await _orderRepository.GetByIdAsync(dto.OrderId);
+                        if (refreshedOrder != null && refreshedOrder.FimBizOrderId.HasValue)
+                        {
+                            order.FimBizOrderId = refreshedOrder.FimBizOrderId;
+                            order.SyncedWithFimBizAt = refreshedOrder.SyncedWithFimBizAt;
+                            order.OrderNumber = refreshedOrder.OrderNumber;
+                        }
+                    }
+                }
+                
                 await SendCommentToFimBizAsync(order, comment, externalCommentId, dto.CommentText, dto.AuthorName);
             }
             else
@@ -366,6 +392,10 @@ public class OrderCommentService : IOrderCommentService
         {
             try
             {
+                // Определяем, является ли это первым комментарием
+                bool isFirstComment = order.SyncedWithFimBizAt.HasValue && 
+                                      (comment.CreatedAt - order.SyncedWithFimBizAt.Value).TotalSeconds < 10;
+
                 var grpcComment = new GrpcOrderComment
                 {
                     CommentId = comment.ExternalCommentId,
@@ -393,30 +423,80 @@ public class OrderCommentService : IOrderCommentService
                     Comment = grpcComment
                 };
 
-                var response = await _fimBizGrpcClient.CreateCommentAsync(request);
-                if (!response.Success)
+                // Retry-логика с экспоненциальной задержкой для первого комментария
+                int maxRetries = isFirstComment ? 3 : 1;
+                int retryCount = 0;
+                bool commentSent = false;
+
+                while (retryCount < maxRetries && !commentSent)
                 {
-                    // Проверяем, не является ли это дублированием
-                    if (response.Message != null && 
-                        (response.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
-                         response.Message.Contains("уже существует", StringComparison.OrdinalIgnoreCase) ||
-                         response.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
-                         response.Message.Contains("дубликат", StringComparison.OrdinalIgnoreCase)))
+                    try
                     {
-                        _logger.LogDebug("Комментарий {CommentId} уже существует в FimBiz (дублирование). Пропускаем.", 
-                            comment.ExternalCommentId);
-                        skippedCount++;
+                        if (retryCount > 0)
+                        {
+                            var delaySeconds = (int)Math.Pow(2, retryCount); // 2s, 4s, 8s
+                            _logger.LogInformation(
+                                "🔄 Повторная попытка отправки комментария {CommentId} (попытка {RetryCount}/{MaxRetries}). Задержка: {DelaySeconds} сек.",
+                                comment.ExternalCommentId, retryCount + 1, maxRetries, delaySeconds);
+                            await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                        }
+
+                        var response = await _fimBizGrpcClient.CreateCommentAsync(request);
+                        
+                        if (!response.Success)
+                        {
+                            // Проверяем, не является ли это дублированием
+                            if (response.Message != null && 
+                                (response.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
+                                 response.Message.Contains("уже существует", StringComparison.OrdinalIgnoreCase) ||
+                                 response.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
+                                 response.Message.Contains("дубликат", StringComparison.OrdinalIgnoreCase)))
+                            {
+                                _logger.LogInformation("✅ Комментарий {CommentId} уже существует в FimBiz (дублирование). Пропускаем.", 
+                                    comment.ExternalCommentId);
+                                skippedCount++;
+                                commentSent = true;
+                            }
+                            else if (isFirstComment && retryCount < maxRetries - 1)
+                            {
+                                retryCount++;
+                                _logger.LogWarning(
+                                    "⚠️ Не удалось отправить первый комментарий {CommentId} в FimBiz: {Message}. Будет повторная попытка ({RetryCount}/{MaxRetries}).",
+                                    comment.ExternalCommentId, response.Message, retryCount + 1, maxRetries);
+                                continue;
+                            }
+                            else
+                            {
+                                _logger.LogWarning("❌ Не удалось отправить комментарий {CommentId} в FimBiz: {Message}", 
+                                    comment.ExternalCommentId, response.Message);
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            sentCount++;
+                            _logger.LogInformation("✅ Комментарий {CommentId} успешно отправлен в FimBiz. RetryCount: {RetryCount}", 
+                                comment.ExternalCommentId, retryCount);
+                            commentSent = true;
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        _logger.LogWarning("Не удалось отправить комментарий {CommentId} в FimBiz: {Message}", 
-                            comment.ExternalCommentId, response.Message);
+                        retryCount++;
+                        if (isFirstComment && retryCount < maxRetries)
+                        {
+                            _logger.LogWarning(ex, 
+                                "⚠️ Ошибка при отправке первого комментария {CommentId} в FimBiz (попытка {RetryCount}/{MaxRetries}). Будет повторная попытка.",
+                                comment.ExternalCommentId, retryCount, maxRetries);
+                            continue;
+                        }
+                        else
+                        {
+                            _logger.LogError(ex, "❌ Ошибка при отправке комментария {CommentId} в FimBiz после {RetryCount} попыток", 
+                                comment.ExternalCommentId, retryCount);
+                            break;
+                        }
                     }
-                }
-                else
-                {
-                    sentCount++;
-                    _logger.LogDebug("Комментарий {CommentId} успешно отправлен в FimBiz", comment.ExternalCommentId);
                 }
             }
             catch (Exception ex)
@@ -475,53 +555,111 @@ public class OrderCommentService : IOrderCommentService
             Comment = grpcComment
         };
 
+        // Определяем, является ли это первым комментарием (созданным сразу после синхронизации)
+        bool isFirstComment = order.SyncedWithFimBizAt.HasValue && 
+                              (DateTime.UtcNow - order.SyncedWithFimBizAt.Value).TotalSeconds < 10;
+
         // Детальное логирование запроса
         _logger.LogInformation(
-            "📤 Отправка комментария в FimBiz. CommentId: {CommentId}, ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, CommentText: {CommentText}, AuthorName: {AuthorName}, AttachmentsCount: {AttachmentsCount}",
+            "📤 Отправка комментария в FimBiz. CommentId: {CommentId}, ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, CommentText: {CommentText}, AuthorName: {AuthorName}, AttachmentsCount: {AttachmentsCount}, IsFirstComment: {IsFirstComment}",
             externalCommentId, externalOrderId, order.FimBizOrderId.Value, 
             commentText?.Substring(0, Math.Min(100, commentText?.Length ?? 0)) ?? "", 
             authorName ?? "", 
-            comment.Attachments?.Count ?? 0);
+            comment.Attachments?.Count ?? 0,
+            isFirstComment);
 
-        try
+        // Retry-логика с экспоненциальной задержкой для первого комментария
+        int maxRetries = isFirstComment ? 3 : 1;
+        int retryCount = 0;
+        bool success = false;
+
+        while (retryCount < maxRetries && !success)
         {
-            var response = await _fimBizGrpcClient.CreateCommentAsync(request);
-            
-            // Детальное логирование ответа
-            _logger.LogInformation(
-                "📥 Ответ от FimBiz для комментария {CommentId}. Success: {Success}, Message: {Message}",
-                externalCommentId, response.Success, response.Message ?? "нет сообщения");
-            if (!response.Success)
+            try
             {
-                // Обработка дублирования комментария
-                if (response.Message != null && 
-                    (response.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
-                     response.Message.Contains("уже существует", StringComparison.OrdinalIgnoreCase) ||
-                     response.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
-                     response.Message.Contains("дубликат", StringComparison.OrdinalIgnoreCase)))
+                if (retryCount > 0)
                 {
+                    var delaySeconds = (int)Math.Pow(2, retryCount); // 2s, 4s, 8s
                     _logger.LogInformation(
-                        "Комментарий {CommentId} уже существует в FimBiz (дублирование). ExternalOrderId: {ExternalOrderId}, Message: {Message}",
-                        externalCommentId, externalOrderId, response.Message);
+                        "🔄 Повторная попытка отправки комментария {CommentId} (попытка {RetryCount}/{MaxRetries}). Задержка: {DelaySeconds} сек.",
+                        externalCommentId, retryCount + 1, maxRetries, delaySeconds);
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                }
+
+                var response = await _fimBizGrpcClient.CreateCommentAsync(request);
+                
+                // Детальное логирование ответа
+                _logger.LogInformation(
+                    "📥 Ответ от FimBiz для комментария {CommentId}. Success: {Success}, Message: {Message}, RetryCount: {RetryCount}",
+                    externalCommentId, response.Success, response.Message ?? "нет сообщения", retryCount);
+                
+                if (!response.Success)
+                {
+                    // Обработка дублирования комментария
+                    if (response.Message != null && 
+                        (response.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("уже существует", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("дубликат", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _logger.LogInformation(
+                            "✅ Комментарий {CommentId} уже существует в FimBiz (дублирование). ExternalOrderId: {ExternalOrderId}, Message: {Message}",
+                            externalCommentId, externalOrderId, response.Message);
+                        success = true; // Дубликат считается успехом
+                        break;
+                    }
+                    else if (isFirstComment && retryCount < maxRetries - 1)
+                    {
+                        // Для первого комментария делаем retry при любой ошибке
+                        retryCount++;
+                        _logger.LogWarning(
+                            "⚠️ Не удалось отправить первый комментарий {CommentId} в FimBiz: {Message}. Будет повторная попытка ({RetryCount}/{MaxRetries}).",
+                            externalCommentId, response.Message, retryCount + 1, maxRetries);
+                        continue;
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "❌ Не удалось отправить комментарий {CommentId} в FimBiz. ExternalOrderId: {ExternalOrderId}, Message: {Message}", 
+                            externalCommentId, externalOrderId, response.Message);
+                        success = false;
+                        break;
+                    }
                 }
                 else
                 {
-                    _logger.LogWarning(
-                        "Не удалось отправить комментарий {CommentId} в FimBiz. ExternalOrderId: {ExternalOrderId}, Message: {Message}", 
-                        externalCommentId, externalOrderId, response.Message);
+                    _logger.LogInformation(
+                        "✅ Комментарий {CommentId} успешно отправлен в FimBiz. ExternalOrderId: {ExternalOrderId}, RetryCount: {RetryCount}", 
+                        externalCommentId, externalOrderId, retryCount);
+                    success = true;
+                    break;
                 }
             }
-            else
+            catch (Exception ex)
             {
-                _logger.LogInformation(
-                    "🎉 Комментарий {CommentId} успешно отправлен в FimBiz. ExternalOrderId: {ExternalOrderId}", 
-                    externalCommentId, externalOrderId);
+                retryCount++;
+                if (isFirstComment && retryCount < maxRetries)
+                {
+                    _logger.LogWarning(ex, 
+                        "⚠️ Ошибка при отправке первого комментария {CommentId} в FimBiz (попытка {RetryCount}/{MaxRetries}). Будет повторная попытка.",
+                        externalCommentId, retryCount, maxRetries);
+                    continue;
+                }
+                else
+                {
+                    _logger.LogError(ex, "❌ Ошибка при отправке комментария {CommentId} в FimBiz после {RetryCount} попыток", 
+                        externalCommentId, retryCount);
+                    break;
+                }
             }
         }
-        catch (Exception ex)
+
+        if (!success && isFirstComment)
         {
-            _logger.LogError(ex, "Ошибка при отправке комментария {CommentId} в FimBiz", externalCommentId);
-            throw;
+            _logger.LogWarning(
+                "⚠️ Не удалось отправить первый комментарий {CommentId} в FimBiz после {MaxRetries} попыток. " +
+                "Комментарий будет отправлен позже через SendUnsentCommentsToFimBizAsync.",
+                externalCommentId, maxRetries);
         }
     }
 
