@@ -436,9 +436,69 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 || request.UpdInfo != null;
 
             // Дедупликация уведомлений: проверяем, не было ли уже обработано такое же уведомление
-            var statusChangedAt = request.StatusChangedAt > 0 
-                ? DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt).UtcDateTime 
-                : DateTime.UtcNow;
+            // ИСПРАВЛЕНИЕ: FimBiz иногда отправляет Unix timestamp в локальном времени (UTC+5), а не в UTC
+            DateTime statusChangedAt;
+            if (request.StatusChangedAt > 0)
+            {
+                var convertedTime = DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt).UtcDateTime;
+                
+                // Проверяем последнюю запись в истории статусов для определения, нужно ли корректировать время
+                // StatusHistory должен быть загружен через Include в GetByIdAsync/GetByFimBizOrderIdAsync
+                bool needsCorrection = false;
+                if (order.StatusHistory != null && order.StatusHistory.Any())
+                {
+                    var lastStatusHistory = order.StatusHistory
+                        .OrderByDescending(h => h.ChangedAt)
+                        .FirstOrDefault();
+                    
+                    if (lastStatusHistory != null)
+                    {
+                        // Если новое время на 5 часов меньше последнего, вероятно это локальное время
+                        var timeDiff = (lastStatusHistory.ChangedAt - convertedTime).TotalHours;
+                        if (timeDiff > 4.5 && timeDiff < 5.5)
+                        {
+                            needsCorrection = true;
+                        }
+                    }
+                }
+                
+                // Также проверяем относительно времени создания заказа
+                if (!needsCorrection && order.CreatedAt != default)
+                {
+                    var timeDiffFromCreation = (order.CreatedAt - convertedTime).TotalHours;
+                    // Если конвертированное время меньше времени создания заказа более чем на 4 часа,
+                    // и разница близка к 5 часам, вероятно это локальное время
+                    if (timeDiffFromCreation > 4 && timeDiffFromCreation < 6)
+                    {
+                        needsCorrection = true;
+                    }
+                }
+                
+                if (needsCorrection)
+                {
+                    // Добавляем 5 часов (18000 секунд) для коррекции локального времени в UTC
+                    statusChangedAt = DateTimeOffset.FromUnixTimeSeconds(request.StatusChangedAt + 18000).UtcDateTime;
+                    _logger.LogWarning(
+                        "⚠️ [TIME CORRECTION] FimBiz отправил локальное время вместо UTC. " +
+                        "Исходный UnixTimestamp: {UnixTimestamp}, " +
+                        "Исходное время (как UTC): {OriginalUtc}, " +
+                        "Скорректированное UTC DateTime: {CorrectedUtc}, " +
+                        "OrderId: {OrderId}, Status: {Status}",
+                        request.StatusChangedAt,
+                        convertedTime,
+                        statusChangedAt,
+                        orderId,
+                        newStatus);
+                }
+                else
+                {
+                    statusChangedAt = convertedTime;
+                }
+            }
+            else
+            {
+                statusChangedAt = DateTime.UtcNow;
+            }
             
             // Логирование для отладки конвертации времени
             _logger.LogInformation(
