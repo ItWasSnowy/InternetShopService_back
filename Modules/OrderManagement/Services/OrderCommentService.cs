@@ -353,19 +353,11 @@ public class OrderCommentService : IOrderCommentService
             unsentComments.Count, orderId);
 
         // Определяем правильный ExternalOrderId
-        string externalOrderId;
-        if (order.SyncedWithFimBizAt.HasValue &&
-            order.CreatedAt <= order.SyncedWithFimBizAt.Value &&
-            (order.SyncedWithFimBizAt.Value - order.CreatedAt).TotalSeconds < 2)
-        {
-            // Заказ создан в FimBiz
-            externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
-        }
-        else
-        {
-            // Заказ создан в интернет-магазине
-            externalOrderId = order.Id.ToString();
-        }
+        // После синхронизации заказ в FimBiz всегда хранится с ExternalOrderId = "FIMBIZ-{FimBizOrderId}"
+        // независимо от того, где был создан заказ изначально
+        string externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
+        _logger.LogInformation("Используем ExternalOrderId для неотправленных комментариев: {ExternalOrderId} (FimBizOrderId: {FimBizOrderId}, OrderId: {OrderId})", 
+            externalOrderId, order.FimBizOrderId.Value, order.Id);
 
         int sentCount = 0;
         int skippedCount = 0;
@@ -450,23 +442,11 @@ public class OrderCommentService : IOrderCommentService
         }
 
         // Определяем правильный ExternalOrderId
-        string externalOrderId;
-        if (order.SyncedWithFimBizAt.HasValue &&
-            order.CreatedAt <= order.SyncedWithFimBizAt.Value &&
-            (order.SyncedWithFimBizAt.Value - order.CreatedAt).TotalSeconds < 2)
-        {
-            // Заказ создан в FimBiz
-            externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
-            _logger.LogDebug("Заказ {OrderId} создан в FimBiz, используем ExternalOrderId: {ExternalOrderId}", 
-                order.Id, externalOrderId);
-        }
-        else
-        {
-            // Заказ создан в интернет-магазине
-            externalOrderId = order.Id.ToString();
-            _logger.LogDebug("Заказ {OrderId} создан в интернет-магазине, используем ExternalOrderId: {ExternalOrderId}", 
-                order.Id, externalOrderId);
-        }
+        // После синхронизации заказ в FimBiz всегда хранится с ExternalOrderId = "FIMBIZ-{FimBizOrderId}"
+        // независимо от того, где был создан заказ изначально
+        string externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
+        _logger.LogInformation("Используем ExternalOrderId для комментария: {ExternalOrderId} (FimBizOrderId: {FimBizOrderId}, OrderId: {OrderId})", 
+            externalOrderId, order.FimBizOrderId.Value, order.Id);
 
         var grpcComment = new GrpcOrderComment
         {
@@ -495,9 +475,22 @@ public class OrderCommentService : IOrderCommentService
             Comment = grpcComment
         };
 
+        // Детальное логирование запроса
+        _logger.LogInformation(
+            "📤 Отправка комментария в FimBiz. CommentId: {CommentId}, ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, CommentText: {CommentText}, AuthorName: {AuthorName}, AttachmentsCount: {AttachmentsCount}",
+            externalCommentId, externalOrderId, order.FimBizOrderId.Value, 
+            commentText?.Substring(0, Math.Min(100, commentText?.Length ?? 0)) ?? "", 
+            authorName ?? "", 
+            comment.Attachments?.Count ?? 0);
+
         try
         {
             var response = await _fimBizGrpcClient.CreateCommentAsync(request);
+            
+            // Детальное логирование ответа
+            _logger.LogInformation(
+                "📥 Ответ от FimBiz для комментария {CommentId}. Success: {Success}, Message: {Message}",
+                externalCommentId, response.Success, response.Message ?? "нет сообщения");
             if (!response.Success)
             {
                 // Обработка дублирования комментария
