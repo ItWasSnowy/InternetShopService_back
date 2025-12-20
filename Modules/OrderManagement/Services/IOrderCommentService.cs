@@ -11,5 +11,10 @@ public interface IOrderCommentService
     Task<OrderCommentDto?> GetCommentByIdAsync(Guid commentId);
     Task<bool> DeleteCommentAsync(Guid commentId);
     Task<OrderCommentAttachmentDto> UploadAttachmentAsync(Guid orderId, Guid userId, IFormFile file);
+    
+    /// <summary>
+    /// Отправляет неотправленные комментарии заказа в FimBiz после синхронизации заказа
+    /// </summary>
+    Task SendUnsentCommentsToFimBizAsync(Guid orderId);
 }
 

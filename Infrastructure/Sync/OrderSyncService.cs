@@ -3,10 +3,12 @@ using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
+using InternetShopService_back.Modules.OrderManagement.Services;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Shared.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Grpc.Core;
@@ -337,6 +339,18 @@ public class OrderSyncService : BackgroundService
                 }
 
                 await orderRepository.UpdateAsync(order);
+
+                // Отправляем неотправленные комментарии в FimBiz
+                try
+                {
+                    var commentService = _serviceProvider.GetRequiredService<IOrderCommentService>();
+                    await commentService.SendUnsentCommentsToFimBizAsync(order.Id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Ошибка при отправке неотправленных комментариев для заказа {OrderId}", order.Id);
+                    // Не прерываем выполнение, заказ уже синхронизирован
+                }
 
                 _logger.LogInformation(
                     "Заказ {OrderId} успешно отправлен в FimBiz. FimBizOrderId: {FimBizOrderId}, OrderNumber: {OrderNumber}",

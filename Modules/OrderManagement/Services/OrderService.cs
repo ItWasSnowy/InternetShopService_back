@@ -15,6 +15,7 @@ using InternetShopService_back.Shared.Repositories;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using OrderStatus = InternetShopService_back.Modules.OrderManagement.Models.OrderStatus;
 using GrpcOrder = InternetShopService_back.Infrastructure.Grpc.Orders.Order;
@@ -42,6 +43,7 @@ public class OrderService : IOrderService
     private readonly ApplicationDbContext _context;
     private readonly ILogger<OrderService> _logger;
     private readonly IConfiguration _configuration;
+    private readonly IServiceProvider _serviceProvider;
     private const int _codeExpirationMinutes = 30; // Время действия кода подтверждения
 
     public OrderService(
@@ -56,7 +58,8 @@ public class OrderService : IOrderService
         ICallService callService,
         ApplicationDbContext context,
         ILogger<OrderService> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IServiceProvider serviceProvider)
     {
         _orderRepository = orderRepository;
         _userAccountRepository = userAccountRepository;
@@ -70,6 +73,7 @@ public class OrderService : IOrderService
         _context = context;
         _logger = logger;
         _configuration = configuration;
+        _serviceProvider = serviceProvider;
     }
 
     public async Task<OrderDto> CreateOrderAsync(CreateOrderDto dto)
@@ -674,6 +678,18 @@ public class OrderService : IOrderService
                 }
 
                 await _orderRepository.UpdateAsync(order);
+                
+                // Отправляем неотправленные комментарии в FimBiz
+                try
+                {
+                    var commentService = _serviceProvider.GetRequiredService<IOrderCommentService>();
+                    await commentService.SendUnsentCommentsToFimBizAsync(order.Id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Ошибка при отправке неотправленных комментариев для заказа {OrderId}", order.Id);
+                    // Не прерываем выполнение, заказ уже синхронизирован
+                }
                 
                 _logger.LogInformation("Заказ {OrderId} успешно отправлен в FimBiz. FimBizOrderId: {FimBizOrderId}, OrderNumber: {OrderNumber}", 
                     order.Id, order.FimBizOrderId, order.OrderNumber);

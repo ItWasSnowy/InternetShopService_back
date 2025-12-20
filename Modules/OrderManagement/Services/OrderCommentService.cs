@@ -351,6 +351,120 @@ public class OrderCommentService : IOrderCommentService
         return $"{baseUrl}{relativePath}";
     }
 
+    /// <summary>
+    /// Отправляет неотправленные комментарии заказа в FimBiz после синхронизации заказа
+    /// </summary>
+    public async Task SendUnsentCommentsToFimBizAsync(Guid orderId)
+    {
+        var order = await _orderRepository.GetByIdAsync(orderId);
+        if (order == null || !order.FimBizOrderId.HasValue)
+        {
+            _logger.LogDebug("Заказ {OrderId} не найден или не синхронизирован с FimBiz, пропускаем отправку комментариев", orderId);
+            return;
+        }
+
+        // Получаем все комментарии заказа, созданные в интернет-магазине
+        var comments = await _commentRepository.GetByOrderIdAsync(orderId);
+        var unsentComments = comments
+            .Where(c => c.IsFromInternetShop)
+            .OrderBy(c => c.CreatedAt)
+            .ToList();
+
+        if (!unsentComments.Any())
+        {
+            _logger.LogDebug("Нет комментариев для отправки в FimBiz для заказа {OrderId}", orderId);
+            return;
+        }
+
+        _logger.LogInformation("Найдено {Count} комментариев для отправки в FimBiz для заказа {OrderId}", 
+            unsentComments.Count, orderId);
+
+        // Определяем правильный ExternalOrderId
+        string externalOrderId;
+        if (order.SyncedWithFimBizAt.HasValue &&
+            order.CreatedAt <= order.SyncedWithFimBizAt.Value &&
+            (order.SyncedWithFimBizAt.Value - order.CreatedAt).TotalSeconds < 2)
+        {
+            // Заказ создан в FimBiz
+            externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
+        }
+        else
+        {
+            // Заказ создан в интернет-магазине
+            externalOrderId = order.Id.ToString();
+        }
+
+        int sentCount = 0;
+        int skippedCount = 0;
+
+        foreach (var comment in unsentComments)
+        {
+            try
+            {
+                var grpcComment = new GrpcOrderComment
+                {
+                    CommentId = comment.ExternalCommentId,
+                    ExternalOrderId = externalOrderId,
+                    FimBizOrderId = order.FimBizOrderId.Value,
+                    CommentText = comment.CommentText,
+                    CreatedAt = ((DateTimeOffset)comment.CreatedAt).ToUnixTimeSeconds(),
+                    AuthorName = comment.AuthorName ?? string.Empty,
+                    IsFromInternetShop = true
+                };
+
+                // Добавляем прикрепленные файлы
+                foreach (var attachment in comment.Attachments)
+                {
+                    grpcComment.AttachedFiles.Add(new GrpcAttachedFile
+                    {
+                        FileName = attachment.FileName,
+                        ContentType = attachment.ContentType,
+                        Url = attachment.FileUrl
+                    });
+                }
+
+                var request = new CreateCommentRequest
+                {
+                    Comment = grpcComment
+                };
+
+                var response = await _fimBizGrpcClient.CreateCommentAsync(request);
+                if (!response.Success)
+                {
+                    // Проверяем, не является ли это дублированием
+                    if (response.Message != null && 
+                        (response.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("уже существует", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
+                         response.Message.Contains("дубликат", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _logger.LogDebug("Комментарий {CommentId} уже существует в FimBiz (дублирование). Пропускаем.", 
+                            comment.ExternalCommentId);
+                        skippedCount++;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Не удалось отправить комментарий {CommentId} в FimBiz: {Message}", 
+                            comment.ExternalCommentId, response.Message);
+                    }
+                }
+                else
+                {
+                    sentCount++;
+                    _logger.LogDebug("Комментарий {CommentId} успешно отправлен в FimBiz", comment.ExternalCommentId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при отправке комментария {CommentId} в FimBiz", comment.ExternalCommentId);
+            }
+        }
+
+        _logger.LogInformation(
+            "Отправка комментариев для заказа {OrderId} завершена. Отправлено: {SentCount}, Пропущено (дубликаты): {SkippedCount}, Всего: {TotalCount}",
+            orderId, sentCount, skippedCount, unsentComments.Count);
+    }
+
     private static OrderCommentDto MapToDto(LocalOrderComment comment)
     {
         return new OrderCommentDto
