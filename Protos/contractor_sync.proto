@@ -26,6 +26,22 @@ service ContractorSyncService {
   
   // Получить адреса доставки контрагента из интернет-магазина
   rpc GetContractorDeliveryAddresses (GetContractorDeliveryAddressesRequest) returns (GetContractorDeliveryAddressesResponse);
+  
+  // Создать адрес доставки контрагента в интернет-магазине
+  rpc CreateContractorDeliveryAddress (CreateContractorDeliveryAddressRequest) 
+      returns (CreateContractorDeliveryAddressResponse);
+  
+  // Обновить адрес доставки контрагента в интернет-магазине
+  rpc UpdateContractorDeliveryAddress (UpdateContractorDeliveryAddressRequest) 
+      returns (UpdateContractorDeliveryAddressResponse);
+  
+  // Удалить адрес доставки контрагента в интернет-магазине
+  rpc DeleteContractorDeliveryAddress (DeleteContractorDeliveryAddressRequest) 
+      returns (DeleteContractorDeliveryAddressResponse);
+  
+  // Синхронизировать все адреса доставки контрагента (полная замена)
+  rpc SyncContractorDeliveryAddresses (SyncContractorDeliveryAddressesRequest) 
+      returns (SyncContractorDeliveryAddressesResponse);
 }
 
 // Запрос списка контрагентов
@@ -235,14 +251,80 @@ message GetContractorDeliveryAddressesRequest {
 
 // Ответ со списком адресов доставки
 message GetContractorDeliveryAddressesResponse {
-  repeated DeliveryAddressInfo addresses = 1;
+  repeated DeliveryAddress addresses = 1;
 }
 
-// Адрес доставки контрагента
-message DeliveryAddressInfo {
-  string id = 1;            // Локальный ID адреса в интернет-магазине (GUID)
-  string address = 2;       // Полный адрес доставки
-  bool is_default = 3;      // Адрес по умолчанию
-  int64 date_create = 4;    // Unix timestamp (секунды с 1970-01-01 UTC)
+// Адрес доставки контрагента (структурированный)
+message DeliveryAddress {
+  string id = 1;                        // Локальный ID адреса в интернет-магазине (GUID)
+  string address = 2;                   // Улица, дом, корпус и т.д.
+  optional string city = 3;             // Город
+  optional string region = 4;           // Регион/область
+  optional string postal_code = 5;      // Почтовый индекс
+  optional string apartment = 6;        // Квартира/офис
+  bool is_default = 7;                 // Адрес по умолчанию
+  int64 date_create = 8;               // Unix timestamp (секунды с 1970-01-01 UTC)
+}
+
+// Запрос на создание адреса доставки контрагента
+message CreateContractorDeliveryAddressRequest {
+  int32 contractor_id = 1;              // ID контрагента в ФимБиз
+  string address = 2;                   // Улица, дом, корпус и т.д.
+  optional string city = 3;             // Город
+  optional string region = 4;           // Регион/область
+  optional string postal_code = 5;      // Почтовый индекс
+  optional string apartment = 6;        // Квартира/офис
+  bool is_default = 7;                 // Адрес по умолчанию
+}
+
+// Ответ на создание адреса доставки
+message CreateContractorDeliveryAddressResponse {
+  bool success = 1;                      // Успешно ли создан адрес
+  string message = 2;                   // Сообщение о результате
+  DeliveryAddress address = 3;           // Созданный адрес (с ID из интернет-магазина)
+}
+
+// Запрос на обновление адреса доставки контрагента
+message UpdateContractorDeliveryAddressRequest {
+  int32 contractor_id = 1;              // ID контрагента в ФимБиз
+  string address_id = 2;                // ID адреса в интернет-магазине (GUID строка)
+  string address = 3;                   // Улица, дом, корпус и т.д.
+  optional string city = 4;             // Город
+  optional string region = 5;           // Регион/область
+  optional string postal_code = 6;      // Почтовый индекс
+  optional string apartment = 7;        // Квартира/офис
+  bool is_default = 8;                 // Адрес по умолчанию
+}
+
+// Ответ на обновление адреса доставки
+message UpdateContractorDeliveryAddressResponse {
+  bool success = 1;                      // Успешно ли обновлен адрес
+  string message = 2;                   // Сообщение о результате
+  DeliveryAddress address = 3;           // Обновленный адрес
+}
+
+// Запрос на удаление адреса доставки контрагента
+message DeleteContractorDeliveryAddressRequest {
+  int32 contractor_id = 1;              // ID контрагента в ФимБиз
+  string address_id = 2;                // ID адреса в интернет-магазине (GUID строка)
+}
+
+// Ответ на удаление адреса доставки
+message DeleteContractorDeliveryAddressResponse {
+  bool success = 1;                      // Успешно ли удален адрес
+  string message = 2;                   // Сообщение о результате
+}
+
+// Запрос на синхронизацию всех адресов доставки контрагента (полная замена)
+message SyncContractorDeliveryAddressesRequest {
+  int32 contractor_id = 1;              // ID контрагента в ФимБиз
+  repeated DeliveryAddress addresses = 2; // Список адресов для синхронизации
+}
+
+// Ответ на синхронизацию адресов доставки
+message SyncContractorDeliveryAddressesResponse {
+  bool success = 1;                      // Успешно ли синхронизированы адреса
+  string message = 2;                   // Сообщение о результате
+  repeated DeliveryAddress addresses = 3; // Синхронизированные адреса (с ID из интернет-магазина)
 }
 

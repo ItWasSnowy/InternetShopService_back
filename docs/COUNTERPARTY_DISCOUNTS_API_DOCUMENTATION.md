@@ -448,3 +448,5 @@ function isDiscountValid(discount: DiscountDto): boolean {
 - [API Документация: Работа с корзиной](./CART_API_DOCUMENTATION.md) - применение скидок в корзине
 - [gRPC Интеграция скидок контрагентов](../TimeTracingServer/docs/grpc/contractor-discounts-integration.md) - описание получения скидок из FimBiz
 - [API Документация: Контрагент](./API_DOCUMENTATION.md) - общая документация по API контрагента
+
+
