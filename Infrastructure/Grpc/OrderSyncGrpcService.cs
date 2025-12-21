@@ -1095,6 +1095,57 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     orderId, oldCarrierValue ?? "null", order.Carrier ?? "null");
             }
 
+            // Обрабатываем delivery_address_id (ID адреса доставки из интернет-магазина)
+            var oldDeliveryAddressId = order.DeliveryAddressId;
+            if (!string.IsNullOrEmpty(request.Order.DeliveryAddressId))
+            {
+                // Парсим GUID из строки
+                if (Guid.TryParse(request.Order.DeliveryAddressId, out var addressId))
+                {
+                    // Проверяем, что адрес существует и принадлежит контрагенту
+                    var address = await _deliveryAddressRepository.GetByIdAsync(addressId);
+                    if (address != null)
+                    {
+                        // Проверяем, что адрес принадлежит UserAccount заказа
+                        if (address.UserAccountId == order.UserAccountId)
+                        {
+                            order.DeliveryAddressId = addressId;
+                            _logger.LogInformation("Обновлен DeliveryAddressId заказа {OrderId} на {AddressId}", 
+                                orderId, addressId);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Адрес {AddressId} не принадлежит UserAccount {UserAccountId} заказа {OrderId}. Связь не установлена.", 
+                                addressId, order.UserAccountId, orderId);
+                            order.DeliveryAddressId = null;
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Адрес {AddressId} не найден для заказа {OrderId}. Связь обнулена.", 
+                            addressId, orderId);
+                        order.DeliveryAddressId = null;
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Неверный формат delivery_address_id '{DeliveryAddressId}' для заказа {OrderId}. Связь обнулена.", 
+                        request.Order.DeliveryAddressId, orderId);
+                    order.DeliveryAddressId = null;
+                }
+            }
+            else
+            {
+                // delivery_address_id не указан - обнуляем связь
+                order.DeliveryAddressId = null;
+            }
+
+            if (oldDeliveryAddressId != order.DeliveryAddressId)
+            {
+                _logger.LogInformation("Изменен DeliveryAddressId заказа {OrderId} с '{OldAddressId}' на '{NewAddressId}'", 
+                    orderId, oldDeliveryAddressId?.ToString() ?? "null", order.DeliveryAddressId?.ToString() ?? "null");
+            }
+
             // Обновляем флаги
             order.IsPriority = request.Order.IsPriority;
             order.IsLongAssembling = request.Order.IsLongAssembling;
@@ -1334,6 +1385,34 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                     userAccount.Id, localCounterparty.Id);
             }
 
+            // Обрабатываем delivery_address_id (ID адреса доставки из интернет-магазина)
+            Guid? deliveryAddressId = null;
+            if (!string.IsNullOrEmpty(grpcOrder.DeliveryAddressId))
+            {
+                // Парсим GUID из строки
+                if (Guid.TryParse(grpcOrder.DeliveryAddressId, out var addressId))
+                {
+                    // Проверяем, что адрес существует и принадлежит UserAccount
+                    var address = await _deliveryAddressRepository.GetByIdAsync(addressId);
+                    if (address != null && address.UserAccountId == userAccount.Id)
+                    {
+                        deliveryAddressId = addressId;
+                        _logger.LogInformation("Найден адрес доставки {AddressId} для заказа {OrderId}", 
+                            addressId, orderId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Адрес {AddressId} не найден или не принадлежит UserAccount {UserAccountId} для заказа {OrderId}", 
+                            addressId, userAccount.Id, orderId);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Неверный формат delivery_address_id '{DeliveryAddressId}' для заказа {OrderId}", 
+                        grpcOrder.DeliveryAddressId, orderId);
+                }
+            }
+
             // Создаем заказ
             var order = new LocalOrder
             {
@@ -1343,6 +1422,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 OrderNumber = grpcOrder.OrderNumber,
                 Status = MapGrpcStatusToLocal(grpcOrder.Status),
                 DeliveryType = MapGrpcDeliveryTypeToLocal(grpcOrder.DeliveryType),
+                DeliveryAddressId = deliveryAddressId,
                 TotalAmount = (decimal)grpcOrder.TotalPrice / 100, // Из копеек в рубли
                 FimBizOrderId = grpcOrder.OrderId,
                 Carrier = string.IsNullOrEmpty(grpcOrder.Carrier) ? null : grpcOrder.Carrier,

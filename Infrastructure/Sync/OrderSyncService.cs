@@ -240,6 +240,12 @@ public class OrderSyncService : BackgroundService
                 DeliveryType = deliveryType
             };
 
+            // Передаем delivery_address_id, если адрес был выбран из списка
+            if (order.DeliveryAddressId.HasValue)
+            {
+                createOrderRequest.DeliveryAddressId = order.DeliveryAddressId.Value.ToString();
+            }
+
             if (shop.FimBizOrganizationId.HasValue && shop.FimBizOrganizationId.Value > 0)
             {
                 createOrderRequest.OrganizationId = shop.FimBizOrganizationId.Value;
