@@ -38,8 +38,6 @@ message CreateOrderRequest {
 
   string delivery_address = 4;           // Адрес доставки
 
-  optional string delivery_address_id = 10; // ID адреса доставки (GUID строка из интернет-магазина)
-
   DeliveryType delivery_type = 5;        // Тип доставки
 
   repeated OrderItem items = 6;          // Позиции заказа
@@ -52,6 +50,7 @@ message CreateOrderRequest {
 
   repeated AttachedFile attached_files = 10; // Прикрепленные файлы из интернет-магазина
   optional string order_number = 11;     // Номер заказа из интернет-магазина (если передан, используется вместо генерации)
+  optional string delivery_address_id = 12; // ID адреса доставки (GUID строка из интернет-магазина)
 
 }
 

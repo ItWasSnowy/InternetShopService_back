@@ -40,6 +40,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     private readonly IShopRepository _shopRepository;
     private readonly IFimBizGrpcClient _fimBizGrpcClient;
     private readonly IUserAccountRepository _userAccountRepository;
+    private readonly IDeliveryAddressRepository _deliveryAddressRepository;
 
     public OrderSyncGrpcService(
         IOrderRepository orderRepository,
@@ -50,7 +51,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         ICounterpartyRepository counterpartyRepository,
         IShopRepository shopRepository,
         IFimBizGrpcClient fimBizGrpcClient,
-        IUserAccountRepository userAccountRepository)
+        IUserAccountRepository userAccountRepository,
+        IDeliveryAddressRepository deliveryAddressRepository)
     {
         _orderRepository = orderRepository;
         _logger = logger;
@@ -61,6 +63,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         _shopRepository = shopRepository;
         _fimBizGrpcClient = fimBizGrpcClient;
         _userAccountRepository = userAccountRepository;
+        _deliveryAddressRepository = deliveryAddressRepository;
     }
 
     /// <summary>
