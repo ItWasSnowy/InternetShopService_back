@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -18,6 +19,7 @@ using InternetShopService_back.Infrastructure.Notifications;
 using InternetShopService_back.Infrastructure.Serialization;
 using InternetShopService_back.Middleware;
 using InternetShopService_back.Infrastructure.Sync;
+using InternetShopService_back.Infrastructure.SignalR;
 using OrderSyncService = InternetShopService_back.Infrastructure.Sync.OrderSyncService;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Services;
@@ -120,13 +122,30 @@ builder.Services.AddAuthentication(options =>
         ClockSkew = TimeSpan.Zero
     };
 
-    // Проверка активности сессии в БД при каждом запросе
+    // Важно для SignalR: позволяет передавать JWT в query string как access_token
+    // (актуально для WebSocket/SSE подключения)
     options.Events = new JwtBearerEvents
     {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"].ToString();
+            if (!string.IsNullOrWhiteSpace(accessToken))
+            {
+                context.Token = accessToken;
+            }
+            return Task.CompletedTask;
+        },
+        // Проверка активности сессии в БД при каждом запросе
         OnTokenValidated = async context =>
         {
-            // Получаем токен из заголовка
+            // Получаем токен.
+            // Для обычных HTTP запросов он приходит в Authorization header,
+            // для SignalR (WebSocket/SSE) часто приходит в query string как access_token.
             var tokenString = context.Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+            if (string.IsNullOrWhiteSpace(tokenString))
+            {
+                tokenString = context.Request.Query["access_token"].ToString();
+            }
             if (string.IsNullOrEmpty(tokenString))
             {
                 context.Fail("Токен не предоставлен");
@@ -164,7 +183,32 @@ builder.Services.AddAuthentication(options =>
             // Токен валиден, сессия активна - доступ разрешен
         }
     };
+
 });
+
+// SignalR
+builder.Services
+    .AddSignalR(options =>
+    {
+        options.KeepAliveInterval = TimeSpan.FromSeconds(3);
+        options.ClientTimeoutInterval = TimeSpan.FromSeconds(10);
+        options.HandshakeTimeout = TimeSpan.FromSeconds(15);
+    })
+    .AddJsonProtocol(options =>
+    {
+        options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
+
+// Изолированные настройки SignalR для ShopHub
+builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions<ShopHub>>(options =>
+{
+    options.KeepAliveInterval = TimeSpan.FromSeconds(8);
+    options.ClientTimeoutInterval = TimeSpan.FromSeconds(20);
+    options.HandshakeTimeout = TimeSpan.FromSeconds(30);
+});
+
+builder.Services.AddSingleton<ShopConnectionManager>();
+builder.Services.AddSingleton<IShopNotificationService, ShopNotificationService>();
 
 builder.Services.AddAuthorization();
 
@@ -334,6 +378,9 @@ app.UseUserContext();
 app.MapGrpcService<ContractorSyncGrpcService>();
 app.MapGrpcService<OrderSyncGrpcService>();
 app.MapGrpcService<OrderCommentSyncGrpcService>();
+
+// SignalR hubs
+app.MapHub<ShopHub>("/shophub");
 
 app.MapControllers();
 

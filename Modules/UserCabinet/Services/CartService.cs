@@ -1,4 +1,5 @@
 using System.Text.Json;
+using InternetShopService_back.Infrastructure.SignalR;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Services;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
@@ -16,6 +17,7 @@ public class CartService : ICartService
     private readonly IUserAccountRepository _userAccountRepository;
     private readonly ICounterpartyRepository _counterpartyRepository;
     private readonly IOrderService _orderService;
+    private readonly IShopNotificationService _shopNotificationService;
     private readonly ILogger<CartService> _logger;
 
     public CartService(
@@ -23,12 +25,14 @@ public class CartService : ICartService
         IUserAccountRepository userAccountRepository,
         ICounterpartyRepository counterpartyRepository,
         IOrderService orderService,
+        IShopNotificationService shopNotificationService,
         ILogger<CartService> logger)
     {
         _cartRepository = cartRepository;
         _userAccountRepository = userAccountRepository;
         _counterpartyRepository = counterpartyRepository;
         _orderService = orderService;
+        _shopNotificationService = shopNotificationService;
         _logger = logger;
     }
 
@@ -127,7 +131,9 @@ public class CartService : ICartService
         cart = await _cartRepository.GetByUserIdAsync(userId);
         var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
         
-        return MapToCartDto(cart!, discounts);
+        var cartDto = MapToCartDto(cart!, discounts);
+        await _shopNotificationService.CartChanged(userAccount.CounterpartyId, cartDto);
+        return cartDto;
     }
 
     public async Task<CartDto> AddItemsAsync(Guid userId, List<AddCartItemDto> items)
@@ -203,8 +209,10 @@ public class CartService : ICartService
         // Получаем обновленную корзину со скидками
         cart = await _cartRepository.GetByUserIdAsync(userId);
         var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
-        
-        return MapToCartDto(cart!, discounts);
+
+        var cartDto = MapToCartDto(cart!, discounts);
+        await _shopNotificationService.CartChanged(userAccount.CounterpartyId, cartDto);
+        return cartDto;
     }
 
     public async Task<CartDto> UpdateItemAsync(Guid userId, Guid itemId, int quantity)
@@ -244,8 +252,10 @@ public class CartService : ICartService
         // Получаем обновленную корзину со скидками
         cart = await _cartRepository.GetByUserIdAsync(userId);
         var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
-        
-        return MapToCartDto(cart!, discounts);
+
+        var cartDto = MapToCartDto(cart!, discounts);
+        await _shopNotificationService.CartChanged(userAccount.CounterpartyId, cartDto);
+        return cartDto;
     }
 
     public async Task<bool> RemoveItemAsync(Guid userId, Guid itemId)
@@ -270,6 +280,18 @@ public class CartService : ICartService
             // Обновляем время изменения корзины
             cart.UpdatedAt = DateTime.UtcNow;
             await _cartRepository.UpdateAsync(cart);
+
+            var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+            if (userAccount != null)
+            {
+                var updatedCart = await _cartRepository.GetByUserIdAsync(userId);
+                var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
+                if (updatedCart != null)
+                {
+                    var cartDto = MapToCartDto(updatedCart, discounts);
+                    await _shopNotificationService.CartChanged(userAccount.CounterpartyId, cartDto);
+                }
+            }
         }
 
         return result;
@@ -288,6 +310,18 @@ public class CartService : ICartService
         // Обновляем время изменения корзины
         cart.UpdatedAt = DateTime.UtcNow;
         await _cartRepository.UpdateAsync(cart);
+
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount != null)
+        {
+            var updatedCart = await _cartRepository.GetByUserIdAsync(userId);
+            var discounts = await _counterpartyRepository.GetActiveDiscountsAsync(userAccount.CounterpartyId);
+            if (updatedCart != null)
+            {
+                var cartDto = MapToCartDto(updatedCart, discounts);
+                await _shopNotificationService.CartChanged(userAccount.CounterpartyId, cartDto);
+            }
+        }
 
         return true;
     }

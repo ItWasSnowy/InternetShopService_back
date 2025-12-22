@@ -1,6 +1,7 @@
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
+using InternetShopService_back.Infrastructure.SignalR;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
@@ -20,6 +21,7 @@ public class OrderCommentService : IOrderCommentService
     private readonly IOrderCommentRepository _commentRepository;
     private readonly IOrderRepository _orderRepository;
     private readonly IFimBizGrpcClient _fimBizGrpcClient;
+    private readonly IShopNotificationService _shopNotificationService;
     private readonly ILogger<OrderCommentService> _logger;
     private readonly IConfiguration _configuration;
 
@@ -27,12 +29,14 @@ public class OrderCommentService : IOrderCommentService
         IOrderCommentRepository commentRepository,
         IOrderRepository orderRepository,
         IFimBizGrpcClient fimBizGrpcClient,
+        IShopNotificationService shopNotificationService,
         ILogger<OrderCommentService> logger,
         IConfiguration configuration)
     {
         _commentRepository = commentRepository;
         _orderRepository = orderRepository;
         _fimBizGrpcClient = fimBizGrpcClient;
+        _shopNotificationService = shopNotificationService;
         _logger = logger;
         _configuration = configuration;
     }
@@ -179,7 +183,10 @@ public class OrderCommentService : IOrderCommentService
             // Не прерываем выполнение, комментарий уже сохранен локально
         }
 
-        return MapToDto(comment);
+        var createdDto = MapToDto(comment);
+        await _shopNotificationService.OrderCommentAdded(order.CounterpartyId, createdDto);
+
+        return createdDto;
     }
 
     public async Task<List<OrderCommentDto>> GetCommentsByOrderIdAsync(Guid orderId)

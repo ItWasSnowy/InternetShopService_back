@@ -1,6 +1,9 @@
+using System.Linq;
 using Grpc.Core;
 using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
+using InternetShopService_back.Infrastructure.SignalR;
+using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +24,7 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
 {
     private readonly IOrderRepository _orderRepository;
     private readonly IOrderCommentRepository _commentRepository;
+    private readonly IShopNotificationService _shopNotificationService;
     private readonly ILogger<OrderCommentSyncGrpcService> _logger;
     private readonly IConfiguration _configuration;
     private readonly ApplicationDbContext _dbContext;
@@ -28,12 +32,14 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
     public OrderCommentSyncGrpcService(
         IOrderRepository orderRepository,
         IOrderCommentRepository commentRepository,
+        IShopNotificationService shopNotificationService,
         ILogger<OrderCommentSyncGrpcService> logger,
         IConfiguration configuration,
         ApplicationDbContext dbContext)
     {
         _orderRepository = orderRepository;
         _commentRepository = commentRepository;
+        _shopNotificationService = shopNotificationService;
         _logger = logger;
         _configuration = configuration;
         _dbContext = dbContext;
@@ -157,6 +163,9 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
             _logger.LogInformation("Комментарий {CommentId} из FimBiz успешно сохранен для заказа {OrderId}",
                 grpcComment.CommentId, orderId);
 
+            var dto = MapToDto(comment);
+            await _shopNotificationService.OrderCommentAdded(order.CounterpartyId, dto);
+
             return new NotifyCommentCreatedResponse
             {
                 Success = true,
@@ -173,6 +182,30 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
             throw new RpcException(
                 new Status(StatusCode.Internal, $"Internal error: {ex.Message}"));
         }
+    }
+
+    private static OrderCommentDto MapToDto(LocalOrderComment comment)
+    {
+        return new OrderCommentDto
+        {
+            Id = comment.Id,
+            OrderId = comment.OrderId,
+            ExternalCommentId = comment.ExternalCommentId,
+            CommentText = comment.CommentText,
+            AuthorProfileId = comment.AuthorProfileId,
+            AuthorUserId = comment.AuthorUserId,
+            AuthorName = comment.AuthorName,
+            IsFromInternetShop = comment.IsFromInternetShop,
+            CreatedAt = comment.CreatedAt,
+            Attachments = comment.Attachments.Select(a => new OrderCommentAttachmentDto
+            {
+                Id = a.Id,
+                FileName = a.FileName,
+                ContentType = a.ContentType,
+                FileUrl = a.FileUrl,
+                CreatedAt = a.CreatedAt
+            }).ToList()
+        };
     }
 }
 

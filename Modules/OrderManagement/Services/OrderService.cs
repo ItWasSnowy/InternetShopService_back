@@ -5,6 +5,7 @@ using InternetShopService_back.Infrastructure.Calls;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Infrastructure.Notifications;
+using InternetShopService_back.Infrastructure.SignalR;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
@@ -44,6 +45,7 @@ public class OrderService : IOrderService
     private readonly ILogger<OrderService> _logger;
     private readonly IConfiguration _configuration;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IShopNotificationService _shopNotificationService;
     private const int _codeExpirationMinutes = 30; // Время действия кода подтверждения
 
     public OrderService(
@@ -59,7 +61,8 @@ public class OrderService : IOrderService
         ApplicationDbContext context,
         ILogger<OrderService> logger,
         IConfiguration configuration,
-        IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider,
+        IShopNotificationService shopNotificationService)
     {
         _orderRepository = orderRepository;
         _userAccountRepository = userAccountRepository;
@@ -74,6 +77,7 @@ public class OrderService : IOrderService
         _logger = logger;
         _configuration = configuration;
         _serviceProvider = serviceProvider;
+        _shopNotificationService = shopNotificationService;
     }
 
     public async Task<OrderDto> CreateOrderAsync(CreateOrderDto dto)
@@ -185,7 +189,10 @@ public class OrderService : IOrderService
             // Не прерываем выполнение, заказ уже сохранен локально
         }
 
-        return await MapToOrderDtoAsync(order);
+        var createdDto = await MapToOrderDtoAsync(order);
+        await _shopNotificationService.OrderCreated(order.CounterpartyId, createdDto);
+
+        return createdDto;
     }
 
     public async Task<OrderDto> GetOrderAsync(Guid orderId)
@@ -300,7 +307,10 @@ public class OrderService : IOrderService
         // Отправляем уведомление на email контрагента при изменении статуса
         await SendOrderStatusNotificationAsync(order);
 
-        return await MapToOrderDtoAsync(order);
+        var updatedDto = await MapToOrderDtoAsync(order);
+        await _shopNotificationService.OrderUpdated(order.CounterpartyId, updatedDto);
+
+        return updatedDto;
     }
 
     private async Task SendOrderStatusNotificationAsync(LocalOrder order)

@@ -1,6 +1,7 @@
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
+using InternetShopService_back.Infrastructure.SignalR;
 using Microsoft.Extensions.Logging;
 
 namespace InternetShopService_back.Modules.UserCabinet.Services;
@@ -9,15 +10,18 @@ public class CargoReceiverService : ICargoReceiverService
 {
     private readonly ICargoReceiverRepository _receiverRepository;
     private readonly IUserAccountRepository _userAccountRepository;
+    private readonly IShopNotificationService _shopNotificationService;
     private readonly ILogger<CargoReceiverService> _logger;
 
     public CargoReceiverService(
         ICargoReceiverRepository receiverRepository,
         IUserAccountRepository userAccountRepository,
+        IShopNotificationService shopNotificationService,
         ILogger<CargoReceiverService> logger)
     {
         _receiverRepository = receiverRepository;
         _userAccountRepository = userAccountRepository;
+        _shopNotificationService = shopNotificationService;
         _logger = logger;
     }
 
@@ -63,11 +67,17 @@ public class CargoReceiverService : ICargoReceiverService
         receiver = await _receiverRepository.CreateAsync(receiver);
         _logger.LogInformation("Создан грузополучатель {ReceiverId} для пользователя {UserId}", receiver.Id, userId);
 
-        return MapToDto(receiver);
+        var createdDto = MapToDto(receiver);
+        await _shopNotificationService.CargoReceiverCreated(userAccount.CounterpartyId, createdDto);
+        return createdDto;
     }
 
     public async Task<CargoReceiverDto> UpdateReceiverAsync(Guid userId, Guid receiverId, UpdateCargoReceiverDto dto)
     {
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+            throw new InvalidOperationException("Пользователь не найден");
+
         var receiver = await _receiverRepository.GetByIdAsync(receiverId);
         if (receiver == null || receiver.UserAccountId != userId)
             throw new InvalidOperationException("Грузополучатель не найден");
@@ -82,11 +92,17 @@ public class CargoReceiverService : ICargoReceiverService
         receiver = await _receiverRepository.UpdateAsync(receiver);
         _logger.LogInformation("Обновлен грузополучатель {ReceiverId} для пользователя {UserId}", receiverId, userId);
 
-        return MapToDto(receiver);
+        var updatedDto = MapToDto(receiver);
+        await _shopNotificationService.CargoReceiverUpdated(userAccount.CounterpartyId, updatedDto);
+        return updatedDto;
     }
 
     public async Task<bool> DeleteReceiverAsync(Guid userId, Guid receiverId)
     {
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+            throw new InvalidOperationException("Пользователь не найден");
+
         var receiver = await _receiverRepository.GetByIdAsync(receiverId);
         if (receiver == null || receiver.UserAccountId != userId)
             return false;
@@ -95,6 +111,7 @@ public class CargoReceiverService : ICargoReceiverService
         if (result)
         {
             _logger.LogInformation("Удален грузополучатель {ReceiverId} для пользователя {UserId}", receiverId, userId);
+            await _shopNotificationService.CargoReceiverDeleted(userAccount.CounterpartyId, receiverId);
         }
 
         return result;
@@ -102,6 +119,10 @@ public class CargoReceiverService : ICargoReceiverService
 
     public async Task<CargoReceiverDto> SetDefaultReceiverAsync(Guid userId, Guid receiverId)
     {
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+            throw new InvalidOperationException("Пользователь не найден");
+
         var receiver = await _receiverRepository.GetByIdAsync(receiverId);
         if (receiver == null || receiver.UserAccountId != userId)
             throw new InvalidOperationException("Грузополучатель не найден");
@@ -111,7 +132,9 @@ public class CargoReceiverService : ICargoReceiverService
 
         _logger.LogInformation("Установлен грузополучатель по умолчанию {ReceiverId} для пользователя {UserId}", receiverId, userId);
 
-        return MapToDto(receiver!);
+        var updatedDto = MapToDto(receiver!);
+        await _shopNotificationService.CargoReceiverUpdated(userAccount.CounterpartyId, updatedDto);
+        return updatedDto;
     }
 
     private static CargoReceiverDto MapToDto(CargoReceiver receiver)

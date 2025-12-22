@@ -1,4 +1,5 @@
 using InternetShopService_back.Infrastructure.Grpc;
+using InternetShopService_back.Infrastructure.SignalR;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Shared.Models;
@@ -12,17 +13,20 @@ public class CounterpartyService : ICounterpartyService
     private readonly IUserAccountRepository _userAccountRepository;
     private readonly ICounterpartyRepository _counterpartyRepository;
     private readonly IFimBizGrpcClient _fimBizGrpcClient;
+    private readonly IShopNotificationService _shopNotificationService;
     private readonly ILogger<CounterpartyService> _logger;
 
     public CounterpartyService(
         IUserAccountRepository userAccountRepository,
         ICounterpartyRepository counterpartyRepository,
         IFimBizGrpcClient fimBizGrpcClient,
+        IShopNotificationService shopNotificationService,
         ILogger<CounterpartyService> logger)
     {
         _userAccountRepository = userAccountRepository;
         _counterpartyRepository = counterpartyRepository;
         _fimBizGrpcClient = fimBizGrpcClient;
+        _shopNotificationService = shopNotificationService;
         _logger = logger;
     }
 
@@ -124,6 +128,9 @@ public class CounterpartyService : ICounterpartyService
             }
 
             _logger.LogInformation("Синхронизация данных контрагента {CounterpartyId} завершена", counterpartyId);
+
+            var dto = MapToCounterpartyDto(localCounterparty);
+            await _shopNotificationService.CounterpartyUpdated(counterpartyId, dto);
         }
         catch (Exception ex)
         {

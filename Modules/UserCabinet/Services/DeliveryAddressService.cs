@@ -1,6 +1,7 @@
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
+using InternetShopService_back.Infrastructure.SignalR;
 using Microsoft.Extensions.Logging;
 
 namespace InternetShopService_back.Modules.UserCabinet.Services;
@@ -9,15 +10,18 @@ public class DeliveryAddressService : IDeliveryAddressService
 {
     private readonly IDeliveryAddressRepository _addressRepository;
     private readonly IUserAccountRepository _userAccountRepository;
+    private readonly IShopNotificationService _shopNotificationService;
     private readonly ILogger<DeliveryAddressService> _logger;
 
     public DeliveryAddressService(
         IDeliveryAddressRepository addressRepository,
         IUserAccountRepository userAccountRepository,
+        IShopNotificationService shopNotificationService,
         ILogger<DeliveryAddressService> logger)
     {
         _addressRepository = addressRepository;
         _userAccountRepository = userAccountRepository;
+        _shopNotificationService = shopNotificationService;
         _logger = logger;
     }
 
@@ -63,11 +67,17 @@ public class DeliveryAddressService : IDeliveryAddressService
         address = await _addressRepository.CreateAsync(address);
         _logger.LogInformation("Создан адрес доставки {AddressId} для пользователя {UserId}", address.Id, userId);
 
-        return MapToDto(address);
+        var createdDto = MapToDto(address);
+        await _shopNotificationService.DeliveryAddressCreated(userAccount.CounterpartyId, createdDto);
+        return createdDto;
     }
 
     public async Task<DeliveryAddressDto> UpdateAddressAsync(Guid userId, Guid addressId, UpdateDeliveryAddressDto dto)
     {
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+            throw new InvalidOperationException("Пользователь не найден");
+
         var address = await _addressRepository.GetByIdAsync(addressId);
         if (address == null || address.UserAccountId != userId)
             throw new InvalidOperationException("Адрес не найден");
@@ -82,11 +92,17 @@ public class DeliveryAddressService : IDeliveryAddressService
         address = await _addressRepository.UpdateAsync(address);
         _logger.LogInformation("Обновлен адрес доставки {AddressId} для пользователя {UserId}", addressId, userId);
 
-        return MapToDto(address);
+        var updatedDto = MapToDto(address);
+        await _shopNotificationService.DeliveryAddressUpdated(userAccount.CounterpartyId, updatedDto);
+        return updatedDto;
     }
 
     public async Task<bool> DeleteAddressAsync(Guid userId, Guid addressId)
     {
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+            throw new InvalidOperationException("Пользователь не найден");
+
         var address = await _addressRepository.GetByIdAsync(addressId);
         if (address == null || address.UserAccountId != userId)
             return false;
@@ -95,6 +111,7 @@ public class DeliveryAddressService : IDeliveryAddressService
         if (result)
         {
             _logger.LogInformation("Удален адрес доставки {AddressId} для пользователя {UserId}", addressId, userId);
+            await _shopNotificationService.DeliveryAddressDeleted(userAccount.CounterpartyId, addressId);
         }
 
         return result;
@@ -102,6 +119,10 @@ public class DeliveryAddressService : IDeliveryAddressService
 
     public async Task<DeliveryAddressDto> SetDefaultAddressAsync(Guid userId, Guid addressId)
     {
+        var userAccount = await _userAccountRepository.GetByIdAsync(userId);
+        if (userAccount == null)
+            throw new InvalidOperationException("Пользователь не найден");
+
         var address = await _addressRepository.GetByIdAsync(addressId);
         if (address == null || address.UserAccountId != userId)
             throw new InvalidOperationException("Адрес не найден");
@@ -111,7 +132,9 @@ public class DeliveryAddressService : IDeliveryAddressService
 
         _logger.LogInformation("Установлен адрес по умолчанию {AddressId} для пользователя {UserId}", addressId, userId);
 
-        return MapToDto(address!);
+        var updatedDto = MapToDto(address!);
+        await _shopNotificationService.DeliveryAddressUpdated(userAccount.CounterpartyId, updatedDto);
+        return updatedDto;
     }
 
     private static DeliveryAddressDto MapToDto(DeliveryAddress address)

@@ -5,6 +5,8 @@ using InternetShopService_back.Data;
 using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Infrastructure.Notifications;
+using InternetShopService_back.Infrastructure.SignalR;
+using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Models;
@@ -41,6 +43,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     private readonly IFimBizGrpcClient _fimBizGrpcClient;
     private readonly IUserAccountRepository _userAccountRepository;
     private readonly IDeliveryAddressRepository _deliveryAddressRepository;
+    private readonly IShopNotificationService _shopNotificationService;
 
     public OrderSyncGrpcService(
         IOrderRepository orderRepository,
@@ -52,7 +55,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         IShopRepository shopRepository,
         IFimBizGrpcClient fimBizGrpcClient,
         IUserAccountRepository userAccountRepository,
-        IDeliveryAddressRepository deliveryAddressRepository)
+        IDeliveryAddressRepository deliveryAddressRepository,
+        IShopNotificationService shopNotificationService)
     {
         _orderRepository = orderRepository;
         _logger = logger;
@@ -64,6 +68,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         _fimBizGrpcClient = fimBizGrpcClient;
         _userAccountRepository = userAccountRepository;
         _deliveryAddressRepository = deliveryAddressRepository;
+        _shopNotificationService = shopNotificationService;
     }
 
     /// <summary>
@@ -858,6 +863,9 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             _logger.LogInformation("Заказ {OrderId} успешно обновлен. Статус: {OldStatus} -> {NewStatus}, FimBizOrderId: {FimBizOrderId}", 
                 orderId, oldStatus, newStatus, order.FimBizOrderId);
 
+            var updatedDto = await MapToOrderDtoAsync(order);
+            await _shopNotificationService.OrderUpdated(order.CounterpartyId, updatedDto);
+
             return new NotifyOrderStatusChangeResponse
             {
                 Success = true,
@@ -1031,6 +1039,9 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 
                 order = createResult.Order!;
                 _logger.LogInformation("Заказ {OrderId} успешно создан из FimBiz для контрагента с личным кабинетом", orderId);
+
+                var createdDto = await MapToOrderDtoAsync(order);
+                await _shopNotificationService.OrderCreated(order.CounterpartyId, createdDto);
                 
                 // После создания заказа продолжаем обработку как обновление
             }
@@ -1277,6 +1288,9 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             await _orderRepository.UpdateAsync(order);
 
             _logger.LogInformation("Заказ {OrderId} успешно обновлен", orderId);
+
+            var updatedDto = await MapToOrderDtoAsync(order);
+            await _shopNotificationService.OrderUpdated(order.CounterpartyId, updatedDto);
 
             return new NotifyOrderUpdateResponse
             {
@@ -1899,6 +1913,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
             _logger.LogInformation("Заказ {OrderId} успешно удален по уведомлению от FimBiz. Причина: {Reason}", 
                 orderId, request.Reason ?? "не указана");
+
+            await _shopNotificationService.OrderDeleted(order.CounterpartyId, orderId);
 
             return new NotifyOrderDeleteResponse
             {
@@ -2661,14 +2677,135 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
             OrderStatus.InvoiceConfirmed => "Счет подтвержден",
             OrderStatus.Manufacturing => "Изготавливается",
             OrderStatus.Assembling => "Собирается",
-            OrderStatus.TransferredToCarrier => "Передан в транспортную компанию",
+            OrderStatus.TransferredToCarrier => "Передается в транспортную компанию",
             OrderStatus.DeliveringByCarrier => "Доставляется транспортной компанией",
             OrderStatus.Delivering => "Доставляется",
             OrderStatus.AwaitingPickup => "Ожидает получения",
             OrderStatus.Received => "Получен",
+            OrderStatus.Cancelled => "Отменен",
             _ => "Неизвестный статус"
         };
     }
+
+    private static List<string> DeserializeUrlPhotos(string? urlPhotosJson)
+    {
+        if (string.IsNullOrWhiteSpace(urlPhotosJson))
+        {
+            return new List<string>();
+        }
+
+        try
+        {
+            var result = JsonSerializer.Deserialize<List<string>>(urlPhotosJson);
+            return result ?? new List<string>();
+        }
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
+    private async Task<OrderDto> MapToOrderDtoAsync(LocalOrder order)
+    {
+        if (order.Items == null)
+        {
+            await _dbContext.Entry(order).Collection(o => o.Items).LoadAsync();
+        }
+
+        if (order.Attachments == null)
+        {
+            await _dbContext.Entry(order).Collection(o => o.Attachments).LoadAsync();
+        }
+
+        if (order.StatusHistory == null)
+        {
+            await _dbContext.Entry(order).Collection(o => o.StatusHistory).LoadAsync();
+        }
+
+        var dto = new OrderDto
+        {
+            Id = order.Id,
+            OrderNumber = order.OrderNumber ?? string.Empty,
+            Status = order.Status,
+            StatusName = GetStatusName(order.Status),
+            DeliveryType = order.DeliveryType,
+            TrackingNumber = order.TrackingNumber,
+            Carrier = order.Carrier,
+            TotalAmount = order.TotalAmount,
+            CreatedAt = order.CreatedAt,
+            Items = (order.Items ?? new List<LocalOrderItem>()).Select(i => new OrderItemDto
+            {
+                Id = i.Id,
+                NomenclatureId = i.NomenclatureId,
+                NomenclatureName = i.NomenclatureName ?? string.Empty,
+                Quantity = i.Quantity,
+                Price = i.Price,
+                DiscountPercent = i.DiscountPercent,
+                TotalAmount = i.TotalAmount,
+                UrlPhotos = DeserializeUrlPhotos(i.UrlPhotosJson)
+            }).ToList(),
+            Attachments = (order.Attachments ?? new List<OrderAttachment>()).Select(a => new OrderAttachmentDto
+            {
+                Id = a.Id,
+                FileName = a.FileName ?? string.Empty,
+                ContentType = a.ContentType,
+                IsVisibleToCustomer = a.IsVisibleToCustomer,
+                CreatedAt = a.CreatedAt
+            }).ToList(),
+            StatusHistory = (order.StatusHistory ?? new List<OrderStatusHistory>())
+                .OrderBy(h => h.ChangedAt)
+                .Select(h => new OrderStatusHistoryDto
+                {
+                    Status = h.Status,
+                    StatusName = GetStatusName(h.Status),
+                    ChangedAt = h.ChangedAt,
+                    Comment = h.Comment
+                }).ToList()
+        };
+
+        if (order.DeliveryAddressId.HasValue)
+        {
+            var address = await _deliveryAddressRepository.GetByIdAsync(order.DeliveryAddressId.Value);
+            if (address != null)
+            {
+                dto.DeliveryAddress = new InternetShopService_back.Modules.OrderManagement.DTOs.DeliveryAddressDto
+                {
+                    Id = address.Id,
+                    Address = address.Address ?? string.Empty,
+                    City = address.City,
+                    Region = address.Region,
+                    PostalCode = address.PostalCode
+                };
+            }
+        }
+
+        if (order.CargoReceiverId.HasValue)
+        {
+            var receiver = await _dbContext.CargoReceivers.FirstOrDefaultAsync(r => r.Id == order.CargoReceiverId.Value);
+            if (receiver != null)
+            {
+                dto.CargoReceiver = new InternetShopService_back.Modules.OrderManagement.DTOs.CargoReceiverDto
+                {
+                    Id = receiver.Id,
+                    FullName = receiver.FullName ?? string.Empty,
+                    PassportSeries = receiver.PassportSeries,
+                    PassportNumber = receiver.PassportNumber
+                };
+            }
+        }
+
+        if (order.InvoiceId.HasValue)
+        {
+            var invoice = await _dbContext.Invoices.AsNoTracking().FirstOrDefaultAsync(i => i.Id == order.InvoiceId.Value);
+            if (invoice != null && !string.IsNullOrEmpty(invoice.PdfUrl))
+            {
+                dto.Invoice = new InvoiceInfoDto
+                {
+                    PdfUrl = invoice.PdfUrl
+                };
+            }
+        }
+
+        return dto;
+    }
 }
-
-

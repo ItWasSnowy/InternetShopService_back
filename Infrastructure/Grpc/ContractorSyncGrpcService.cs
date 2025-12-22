@@ -1,5 +1,7 @@
 using Grpc.Core;
 using InternetShopService_back.Infrastructure.Grpc.Contractors;
+using InternetShopService_back.Infrastructure.SignalR;
+using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Services;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Shared.Repositories;
@@ -17,6 +19,7 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
     private readonly SessionControlService _sessionControlService;
     private readonly ICounterpartyRepository _counterpartyRepository;
     private readonly IDeliveryAddressRepository _deliveryAddressRepository;
+    private readonly IShopNotificationService _shopNotificationService;
     private readonly ILogger<ContractorSyncGrpcService> _logger;
     private readonly IConfiguration _configuration;
 
@@ -25,6 +28,7 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
         SessionControlService sessionControlService,
         ICounterpartyRepository counterpartyRepository,
         IDeliveryAddressRepository deliveryAddressRepository,
+        IShopNotificationService shopNotificationService,
         ILogger<ContractorSyncGrpcService> logger,
         IConfiguration configuration)
     {
@@ -32,6 +36,7 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
         _sessionControlService = sessionControlService;
         _counterpartyRepository = counterpartyRepository;
         _deliveryAddressRepository = deliveryAddressRepository;
+        _shopNotificationService = shopNotificationService;
         _logger = logger;
         _configuration = configuration;
     }
@@ -315,6 +320,8 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
             _logger.LogInformation("Создан адрес доставки для контрагента {ContractorId}, AddressId: {AddressId}", 
                 request.ContractorId, newAddress.Id);
 
+            await _shopNotificationService.DeliveryAddressCreated(counterparty.Id, MapToDto(newAddress));
+
             // 7. Вернуть созданный адрес
             return new CreateContractorDeliveryAddressResponse
             {
@@ -436,6 +443,8 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
             _logger.LogInformation("Обновлен адрес доставки для контрагента {ContractorId}, AddressId: {AddressId}", 
                 request.ContractorId, request.AddressId);
 
+            await _shopNotificationService.DeliveryAddressUpdated(counterparty.Id, MapToDto(address));
+
             return new UpdateContractorDeliveryAddressResponse
             {
                 Success = true,
@@ -527,18 +536,20 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
             }
 
             // 5. Удалить адрес
-            var result = await _deliveryAddressRepository.DeleteAsync(addressId);
+            var deleted = await _deliveryAddressRepository.DeleteAsync(addressId);
 
-            if (result)
+            if (deleted)
             {
                 _logger.LogInformation("Удален адрес доставки для контрагента {ContractorId}, AddressId: {AddressId}", 
                     request.ContractorId, request.AddressId);
+
+                await _shopNotificationService.DeliveryAddressDeleted(counterparty.Id, addressId);
             }
 
             return new DeleteContractorDeliveryAddressResponse
             {
-                Success = result,
-                Message = result ? "Адрес доставки успешно удален" : "Не удалось удалить адрес"
+                Success = deleted,
+                Message = deleted ? "Адрес доставки успешно удален" : "Не удалось удалить адрес"
             };
         }
         catch (RpcException)
@@ -697,6 +708,22 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
                 Message = $"Ошибка при синхронизации адресов: {ex.Message}"
             };
         }
+    }
+
+    private static DeliveryAddressDto MapToDto(Modules.UserCabinet.Models.DeliveryAddress address)
+    {
+        return new DeliveryAddressDto
+        {
+            Id = address.Id,
+            Address = address.Address ?? string.Empty,
+            City = address.City,
+            Region = address.Region,
+            PostalCode = address.PostalCode,
+            Apartment = address.Apartment,
+            IsDefault = address.IsDefault,
+            CreatedAt = address.CreatedAt,
+            UpdatedAt = address.UpdatedAt
+        };
     }
 }
 
