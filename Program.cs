@@ -272,6 +272,8 @@ builder.Services.AddCors(options =>
             .Get<string[]>()
             ?? new[]
             {
+                "https://test.fimbiz.ru",
+                "https://tdapi.fimbiz.ru",
                 "http://localhost:5000",
                 "http://localhost:5173",
                 "http://localhost:3000"
