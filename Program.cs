@@ -272,6 +272,7 @@ builder.Services.AddCors(options =>
             .Get<string[]>()
             ?? new[]
             {
+                "https://hydrolan.fimbiz.ru"
                 "https://test.fimbiz.ru",
                 "https://tdapi.fimbiz.ru",
                 "http://localhost:5000",
