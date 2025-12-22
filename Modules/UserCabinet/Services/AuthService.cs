@@ -69,6 +69,19 @@ public class AuthService : IAuthService
 
             // Поиск или создание пользователя
             var userAccount = await _userAccountRepository.GetByPhoneNumberAsync(phoneNumber);
+            if (userAccount != null)
+            {
+                var counterparty = await _counterpartyRepository.GetByIdAsync(userAccount.CounterpartyId);
+                if (counterparty == null)
+                {
+                    throw new InvalidOperationException("Контрагент не найден");
+                }
+
+                if (!counterparty.IsCreateCabinet)
+                {
+                    throw new InvalidOperationException("Для данного контрагента личный кабинет отключен");
+                }
+            }
             
             if (userAccount == null)
             {
@@ -232,6 +245,17 @@ public class AuthService : IAuthService
             if (userAccount == null)
             {
                 throw new InvalidOperationException("Пользователь не найден");
+            }
+
+            var counterparty = await _counterpartyRepository.GetByIdAsync(userAccount.CounterpartyId);
+            if (counterparty == null)
+            {
+                throw new InvalidOperationException("Контрагент не найден");
+            }
+
+            if (!counterparty.IsCreateCabinet)
+            {
+                throw new InvalidOperationException("Для данного контрагента личный кабинет отключен");
             }
 
             // Проверка кода
@@ -461,6 +485,17 @@ public class AuthService : IAuthService
             if (userAccount == null)
             {
                 throw new UnauthorizedAccessException("Неверный номер телефона или пароль");
+            }
+
+            var counterparty = await _counterpartyRepository.GetByIdAsync(userAccount.CounterpartyId);
+            if (counterparty == null)
+            {
+                throw new InvalidOperationException("Контрагент не найден");
+            }
+
+            if (!counterparty.IsCreateCabinet)
+            {
+                throw new InvalidOperationException("Для данного контрагента личный кабинет отключен");
             }
 
             if (!userAccount.IsPasswordSet || string.IsNullOrEmpty(userAccount.PasswordHash))

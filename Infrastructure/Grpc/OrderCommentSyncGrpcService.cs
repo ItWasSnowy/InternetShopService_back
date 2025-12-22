@@ -138,7 +138,7 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
                     ? grpcComment.AuthorProfileId 
                     : null,
                 AuthorName = null, // Комментарий из FimBiz, имя берется из профиля
-                IsFromInternetShop = false,
+                IsFromInternetShop = grpcComment.IsFromInternetShop,
                 CreatedAt = grpcComment.CreatedAt > 0 
                     ? DateTimeOffset.FromUnixTimeSeconds(grpcComment.CreatedAt).UtcDateTime 
                     : DateTime.UtcNow,
@@ -168,13 +168,16 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
             _logger.LogInformation("Комментарий {CommentId} из FimBiz успешно сохранен для заказа {OrderId}",
                 grpcComment.CommentId, orderId);
 
-            await _notificationsService.CreateAsync(
-                order.CounterpartyId,
-                null,
-                "Новый комментарий к заказу",
-                null,
-                ShopNotificationObjectType.Order,
-                orderId);
+            if (!grpcComment.IsFromInternetShop)
+            {
+                await _notificationsService.CreateAsync(
+                    order.CounterpartyId,
+                    null,
+                    "Новый комментарий к заказу",
+                    null,
+                    ShopNotificationObjectType.Order,
+                    orderId);
+            }
 
             var dto = MapToDto(comment);
             await _shopNotificationService.OrderCommentAdded(order.CounterpartyId, dto);
