@@ -71,16 +71,7 @@ public class AuthService : IAuthService
             var userAccount = await _userAccountRepository.GetByPhoneNumberAsync(phoneNumber);
             if (userAccount != null)
             {
-                var counterparty = await _counterpartyRepository.GetByIdAsync(userAccount.CounterpartyId);
-                if (counterparty == null)
-                {
-                    throw new InvalidOperationException("Контрагент не найден");
-                }
-
-                if (!counterparty.IsCreateCabinet)
-                {
-                    throw new InvalidOperationException("Для данного контрагента личный кабинет отключен");
-                }
+                await EnsureCabinetEnabledAsync(userAccount.CounterpartyId);
             }
             
             if (userAccount == null)
@@ -247,16 +238,7 @@ public class AuthService : IAuthService
                 throw new InvalidOperationException("Пользователь не найден");
             }
 
-            var counterparty = await _counterpartyRepository.GetByIdAsync(userAccount.CounterpartyId);
-            if (counterparty == null)
-            {
-                throw new InvalidOperationException("Контрагент не найден");
-            }
-
-            if (!counterparty.IsCreateCabinet)
-            {
-                throw new InvalidOperationException("Для данного контрагента личный кабинет отключен");
-            }
+            await EnsureCabinetEnabledAsync(userAccount.CounterpartyId);
 
             // Проверка кода
             if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(userAccount.PhoneCallDigits))
@@ -487,16 +469,7 @@ public class AuthService : IAuthService
                 throw new UnauthorizedAccessException("Неверный номер телефона или пароль");
             }
 
-            var counterparty = await _counterpartyRepository.GetByIdAsync(userAccount.CounterpartyId);
-            if (counterparty == null)
-            {
-                throw new InvalidOperationException("Контрагент не найден");
-            }
-
-            if (!counterparty.IsCreateCabinet)
-            {
-                throw new InvalidOperationException("Для данного контрагента личный кабинет отключен");
-            }
+            await EnsureCabinetEnabledAsync(userAccount.CounterpartyId);
 
             if (!userAccount.IsPasswordSet || string.IsNullOrEmpty(userAccount.PasswordHash))
             {
@@ -717,6 +690,47 @@ public class AuthService : IAuthService
     {
         return !string.IsNullOrEmpty(phoneNumber) &&
                System.Text.RegularExpressions.Regex.IsMatch(phoneNumber, @"^7\d{10}$");
+    }
+
+    private async Task EnsureCabinetEnabledAsync(Guid counterpartyId)
+    {
+        var counterparty = await _counterpartyRepository.GetByIdAsync(counterpartyId);
+        if (counterparty == null)
+        {
+            throw new InvalidOperationException("Контрагент не найден");
+        }
+
+        // Если локально кабинет уже выключен — запрещаем вход без дополнительных запросов.
+        if (!counterparty.IsCreateCabinet)
+        {
+            throw new InvalidOperationException("Для данного контрагента личный кабинет отключен");
+        }
+
+        // Если у контрагента есть FimBizContractorId, перепроверяем флаг в FimBiz.
+        // Это закрывает кейс, когда фоновая синхронизация/стрим не обновили БД.
+        if (counterparty.FimBizContractorId.HasValue)
+        {
+            var fimBizCounterparty = await _fimBizGrpcClient.GetCounterpartyByFimBizIdAsync(counterparty.FimBizContractorId.Value);
+            if (fimBizCounterparty != null && counterparty.IsCreateCabinet != fimBizCounterparty.IsCreateCabinet)
+            {
+                counterparty.IsCreateCabinet = fimBizCounterparty.IsCreateCabinet;
+                counterparty.LastSyncVersion = fimBizCounterparty.LastSyncVersion;
+                counterparty.UpdatedAt = DateTime.UtcNow;
+
+                await _counterpartyRepository.UpdateAsync(counterparty);
+
+                _logger.LogWarning(
+                    "Флаг IsCreateCabinet обновлен при логине из FimBiz для контрагента {CounterpartyId}: {OldValue} -> {NewValue}",
+                    counterpartyId,
+                    !fimBizCounterparty.IsCreateCabinet,
+                    fimBizCounterparty.IsCreateCabinet);
+            }
+
+            if (!counterparty.IsCreateCabinet)
+            {
+                throw new InvalidOperationException("Для данного контрагента личный кабинет отключен");
+            }
+        }
     }
 
     private (string? deviceInfo, string? userAgent, string? ipAddress) GetDeviceInfo()
