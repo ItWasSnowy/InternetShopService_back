@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Modules.OrderManagement.Models;
+using InternetShopService_back.Modules.Notifications.Models;
 
 namespace InternetShopService_back.Data;
 
@@ -34,6 +35,9 @@ public class ApplicationDbContext : DbContext
     public DbSet<OrderAttachment> OrderAttachments { get; set; }
     public DbSet<OrderComment> OrderComments { get; set; }
     public DbSet<OrderCommentAttachment> OrderCommentAttachments { get; set; }
+
+    // Notifications
+    public DbSet<ShopNotification> ShopNotifications { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

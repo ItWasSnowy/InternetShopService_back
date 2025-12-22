@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
+using InternetShopService_back.Modules.Notifications.DTOs;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using UserCabinetDeliveryAddressDto = InternetShopService_back.Modules.UserCabinet.DTOs.DeliveryAddressDto;
 using UserCabinetCargoReceiverDto = InternetShopService_back.Modules.UserCabinet.DTOs.CargoReceiverDto;
@@ -82,4 +83,19 @@ public sealed class ShopNotificationService : IShopNotificationService
 
     public Task CartChanged(Guid counterpartyId, CartDto cart)
         => Broadcast(counterpartyId, c => c.CartChanged(cart));
+
+    public Task NotificationCreated(Guid counterpartyId, ShopNotificationDto notification)
+        => Broadcast(counterpartyId, c => c.NotificationCreated(notification));
+
+    public Task NotificationUpdated(Guid counterpartyId, ShopNotificationDto notification)
+        => Broadcast(counterpartyId, c => c.NotificationUpdated(notification));
+
+    public Task NotificationRemoved(Guid counterpartyId, Guid notificationId)
+        => Broadcast(counterpartyId, c => c.NotificationRemoved(notificationId));
+
+    public Task NotificationsReadAll(Guid counterpartyId)
+        => Broadcast(counterpartyId, c => c.NotificationsReadAll());
+
+    public Task UnreadNotificationsCountChanged(Guid counterpartyId, int count)
+        => Broadcast(counterpartyId, c => c.UnreadNotificationsCountChanged(count));
 }

@@ -25,6 +25,7 @@ using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Services;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
 using InternetShopService_back.Modules.OrderManagement.Services;
+using InternetShopService_back.Modules.Notifications.Services;
 using InternetShopService_back.Shared.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -209,6 +210,7 @@ builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions<ShopHub>>(opt
 
 builder.Services.AddSingleton<ShopConnectionManager>();
 builder.Services.AddSingleton<IShopNotificationService, ShopNotificationService>();
+builder.Services.AddScoped<IShopNotificationsService, ShopNotificationsService>();
 
 builder.Services.AddAuthorization();
 
@@ -272,7 +274,7 @@ builder.Services.AddCors(options =>
             .Get<string[]>()
             ?? new[]
             {
-                "https://hydrolan.fimbiz.ru"
+                "https://hydrolan.fimbiz.ru",
                 "https://test.fimbiz.ru",
                 "https://tdapi.fimbiz.ru",
                 "http://localhost:5000",

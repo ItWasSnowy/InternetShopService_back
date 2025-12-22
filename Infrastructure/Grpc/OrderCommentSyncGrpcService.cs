@@ -6,6 +6,8 @@ using InternetShopService_back.Infrastructure.SignalR;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
+using InternetShopService_back.Modules.Notifications.Models;
+using InternetShopService_back.Modules.Notifications.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -25,6 +27,7 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
     private readonly IOrderRepository _orderRepository;
     private readonly IOrderCommentRepository _commentRepository;
     private readonly IShopNotificationService _shopNotificationService;
+    private readonly IShopNotificationsService _notificationsService;
     private readonly ILogger<OrderCommentSyncGrpcService> _logger;
     private readonly IConfiguration _configuration;
     private readonly ApplicationDbContext _dbContext;
@@ -33,6 +36,7 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
         IOrderRepository orderRepository,
         IOrderCommentRepository commentRepository,
         IShopNotificationService shopNotificationService,
+        IShopNotificationsService notificationsService,
         ILogger<OrderCommentSyncGrpcService> logger,
         IConfiguration configuration,
         ApplicationDbContext dbContext)
@@ -40,6 +44,7 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
         _orderRepository = orderRepository;
         _commentRepository = commentRepository;
         _shopNotificationService = shopNotificationService;
+        _notificationsService = notificationsService;
         _logger = logger;
         _configuration = configuration;
         _dbContext = dbContext;
@@ -162,6 +167,14 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
 
             _logger.LogInformation("Комментарий {CommentId} из FimBiz успешно сохранен для заказа {OrderId}",
                 grpcComment.CommentId, orderId);
+
+            await _notificationsService.CreateAsync(
+                order.CounterpartyId,
+                null,
+                "Новый комментарий к заказу",
+                null,
+                ShopNotificationObjectType.Order,
+                orderId);
 
             var dto = MapToDto(comment);
             await _shopNotificationService.OrderCommentAdded(order.CounterpartyId, dto);

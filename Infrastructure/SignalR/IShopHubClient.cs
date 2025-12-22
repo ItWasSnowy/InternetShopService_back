@@ -1,5 +1,6 @@
 using System.Threading.Tasks;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
+using InternetShopService_back.Modules.Notifications.DTOs;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
 using UserCabinetDeliveryAddressDto = InternetShopService_back.Modules.UserCabinet.DTOs.DeliveryAddressDto;
 using UserCabinetCargoReceiverDto = InternetShopService_back.Modules.UserCabinet.DTOs.CargoReceiverDto;
@@ -27,4 +28,10 @@ public interface IShopHubClient
     Task CargoReceiverDeleted(System.Guid receiverId);
 
     Task CartChanged(CartDto cart);
+
+    Task NotificationCreated(ShopNotificationDto notification);
+    Task NotificationUpdated(ShopNotificationDto notification);
+    Task NotificationRemoved(System.Guid notificationId);
+    Task NotificationsReadAll();
+    Task UnreadNotificationsCountChanged(int count);
 }

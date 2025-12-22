@@ -6,6 +6,8 @@ using InternetShopService_back.Infrastructure.Grpc;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Infrastructure.Notifications;
 using InternetShopService_back.Infrastructure.SignalR;
+using InternetShopService_back.Modules.Notifications.Models;
+using InternetShopService_back.Modules.Notifications.Services;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.OrderManagement.Repositories;
@@ -44,6 +46,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
     private readonly IUserAccountRepository _userAccountRepository;
     private readonly IDeliveryAddressRepository _deliveryAddressRepository;
     private readonly IShopNotificationService _shopNotificationService;
+    private readonly IShopNotificationsService _notificationsService;
 
     public OrderSyncGrpcService(
         IOrderRepository orderRepository,
@@ -56,7 +59,8 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         IFimBizGrpcClient fimBizGrpcClient,
         IUserAccountRepository userAccountRepository,
         IDeliveryAddressRepository deliveryAddressRepository,
-        IShopNotificationService shopNotificationService)
+        IShopNotificationService shopNotificationService,
+        IShopNotificationsService notificationsService)
     {
         _orderRepository = orderRepository;
         _logger = logger;
@@ -69,6 +73,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
         _userAccountRepository = userAccountRepository;
         _deliveryAddressRepository = deliveryAddressRepository;
         _shopNotificationService = shopNotificationService;
+        _notificationsService = notificationsService;
     }
 
     /// <summary>
@@ -853,6 +858,17 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 await SendOrderStatusNotificationAsync(order, newStatus);
             }
 
+            if (oldStatus != newStatus)
+            {
+                await _notificationsService.CreateAsync(
+                    order.CounterpartyId,
+                    null,
+                    "Статус заказа изменен",
+                    null,
+                    ShopNotificationObjectType.Order,
+                    order.Id);
+            }
+
             // Специальное логирование для успешной обработки Cancelled статуса
             if (newStatus == OrderStatus.Cancelled && oldStatus != newStatus)
             {
@@ -1042,6 +1058,14 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
                 var createdDto = await MapToOrderDtoAsync(order);
                 await _shopNotificationService.OrderCreated(order.CounterpartyId, createdDto);
+
+                await _notificationsService.CreateAsync(
+                    order.CounterpartyId,
+                    null,
+                    "Новый заказ",
+                    null,
+                    ShopNotificationObjectType.Order,
+                    order.Id);
                 
                 // После создания заказа продолжаем обработку как обновление
             }
@@ -1291,6 +1315,17 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
             var updatedDto = await MapToOrderDtoAsync(order);
             await _shopNotificationService.OrderUpdated(order.CounterpartyId, updatedDto);
+
+            if (oldStatus != order.Status)
+            {
+                await _notificationsService.CreateAsync(
+                    order.CounterpartyId,
+                    null,
+                    "Статус заказа изменен",
+                    null,
+                    ShopNotificationObjectType.Order,
+                    order.Id);
+            }
 
             return new NotifyOrderUpdateResponse
             {
