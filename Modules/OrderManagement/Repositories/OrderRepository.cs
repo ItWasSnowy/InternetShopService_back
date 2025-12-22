@@ -326,9 +326,11 @@ public class OrderRepository : IOrderRepository
         var year = today.Year;
         var month = today.Month;
 
+        var prefix = $"ORD-{year}-{month:D2}-";
+
         // Получаем последний номер заказа за текущий месяц
         var lastOrder = await _context.Orders
-            .Where(o => o.CreatedAt.Year == year && o.CreatedAt.Month == month)
+            .Where(o => o.OrderNumber.StartsWith(prefix))
             .OrderByDescending(o => o.OrderNumber)
             .FirstOrDefaultAsync();
 
@@ -343,7 +345,7 @@ public class OrderRepository : IOrderRepository
             }
         }
 
-        return $"ORD-{year}-{month:D2}-{nextNumber:D4}";
+        return $"{prefix}{nextNumber:D4}";
     }
 
     public async Task<List<Order>> GetUnsyncedOrdersAsync(int limit = 100)
