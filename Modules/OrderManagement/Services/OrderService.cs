@@ -1638,7 +1638,9 @@ public class OrderService : IOrderService
             // Не прерываем выполнение при ошибке отправки уведомления
         }
 
-        // Возвращаем DTO (используем перезагруженный заказ с загруженными связанными коллекциями)
-        return await MapToOrderDtoAsync(order);
+        var updatedDto = await MapToOrderDtoAsync(order);
+        await _shopNotificationService.OrderUpdated(order.CounterpartyId, updatedDto);
+
+        return updatedDto;
     }
 }
