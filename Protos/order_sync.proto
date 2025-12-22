@@ -52,6 +52,8 @@ message CreateOrderRequest {
   optional string order_number = 11;     // Номер заказа из интернет-магазина (если передан, используется вместо генерации)
   optional string delivery_address_id = 12; // ID адреса доставки (GUID строка из интернет-магазина)
 
+  optional string carrier = 13;          // Название транспортной компании
+
 }
 
 // Ответ на создание заказа

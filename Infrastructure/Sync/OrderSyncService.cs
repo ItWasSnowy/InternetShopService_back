@@ -240,6 +240,11 @@ public class OrderSyncService : BackgroundService
                 DeliveryType = deliveryType
             };
 
+            if (!string.IsNullOrWhiteSpace(order.Carrier))
+            {
+                createOrderRequest.Carrier = order.Carrier;
+            }
+
             // Передаем delivery_address_id, если адрес был выбран из списка
             if (order.DeliveryAddressId.HasValue)
             {
