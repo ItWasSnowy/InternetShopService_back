@@ -91,7 +91,24 @@ public class OrderRepository : IOrderRepository
         }
 
         _context.Orders.Add(order);
-        await _context.SaveChangesAsync();
+
+        const int maxRetries = 3;
+        for (var attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                await _context.SaveChangesAsync();
+                break;
+            }
+            catch (DbUpdateException ex) when (
+                ex.InnerException is PostgresException pgEx &&
+                pgEx.SqlState == "23505" &&
+                pgEx.ConstraintName == "IX_Orders_OrderNumber" &&
+                attempt < maxRetries)
+            {
+                order.OrderNumber = await GenerateOrderNumberAsync();
+            }
+        }
 
         return order;
     }
