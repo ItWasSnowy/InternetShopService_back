@@ -1,6 +1,9 @@
 using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
+using InternetShopService_back.Data;
+using InternetShopService_back.Modules.Notifications.DTOs;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
@@ -10,11 +13,13 @@ namespace InternetShopService_back.Infrastructure.SignalR;
 [Authorize]
 public class ShopHub : Hub<IShopHubClient>
 {
+    private readonly ApplicationDbContext _dbContext;
     private readonly ShopConnectionManager _connectionManager;
     private readonly ILogger<ShopHub> _logger;
 
-    public ShopHub(ShopConnectionManager connectionManager, ILogger<ShopHub> logger)
+    public ShopHub(ApplicationDbContext dbContext, ShopConnectionManager connectionManager, ILogger<ShopHub> logger)
     {
+        _dbContext = dbContext;
         _connectionManager = connectionManager;
         _logger = logger;
     }
@@ -45,6 +50,42 @@ public class ShopHub : Hub<IShopHubClient>
         _logger.LogInformation("ShopHub joined. UserId={UserId}, CounterpartyId={CounterpartyId}, ConnectionId={ConnectionId}", userId, counterpartyId, connectionId);
 
         await Clients.Caller.ConnectionConfirmed("Успешно подключен к ShopHub");
+
+        var unreadCount = await _dbContext.ShopNotifications
+            .AsNoTracking()
+            .Where(n => n.CounterpartyId == counterpartyId)
+            .Where(n => n.DeletedAt == null)
+            .Where(n => n.UserAccountId == null || n.UserAccountId == userId)
+            .Where(n => !n.IsRead)
+            .CountAsync();
+
+        var unreadItems = await _dbContext.ShopNotifications
+            .AsNoTracking()
+            .Where(n => n.CounterpartyId == counterpartyId)
+            .Where(n => n.DeletedAt == null)
+            .Where(n => n.UserAccountId == null || n.UserAccountId == userId)
+            .Where(n => !n.IsRead)
+            .OrderBy(n => n.CreatedAt)
+            .Take(100)
+            .Select(n => new ShopNotificationDto
+            {
+                Id = n.Id,
+                Title = n.Title,
+                Description = n.Description,
+                ObjectType = n.ObjectType,
+                ObjectId = n.ObjectId,
+                IsRead = n.IsRead,
+                ReadAt = n.ReadAt,
+                CreatedAt = n.CreatedAt
+            })
+            .ToListAsync();
+
+        foreach (var n in unreadItems)
+        {
+            await Clients.Caller.NotificationCreated(n);
+        }
+
+        await Clients.Caller.UnreadNotificationsCountChanged(unreadCount);
     }
 
     public Task LeaveHub()
