@@ -994,7 +994,7 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
             // Парсим external_order_id - может быть Guid или FIMBIZ-{orderId}
             LocalOrder? order = null;
-            Guid orderId;
+            Guid orderId = Guid.Empty;
             bool isNewOrder = false;
             
             if (Guid.TryParse(request.Order.ExternalOrderId, out var parsedGuid))
