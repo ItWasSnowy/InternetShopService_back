@@ -1,9 +1,7 @@
 using System;
 using System.Security.Claims;
 using System.Threading.Tasks;
-using InternetShopService_back.Data;
-using InternetShopService_back.Modules.Notifications.DTOs;
-using Microsoft.EntityFrameworkCore;
+using InternetShopService_back.Infrastructure.Events;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
@@ -13,13 +11,13 @@ namespace InternetShopService_back.Infrastructure.SignalR;
 [Authorize]
 public class ShopHub : Hub<IShopHubClient>
 {
-    private readonly ApplicationDbContext _dbContext;
+    private readonly IEventStore _eventStore;
     private readonly ShopConnectionManager _connectionManager;
     private readonly ILogger<ShopHub> _logger;
 
-    public ShopHub(ApplicationDbContext dbContext, ShopConnectionManager connectionManager, ILogger<ShopHub> logger)
+    public ShopHub(IEventStore eventStore, ShopConnectionManager connectionManager, ILogger<ShopHub> logger)
     {
-        _dbContext = dbContext;
+        _eventStore = eventStore;
         _connectionManager = connectionManager;
         _logger = logger;
     }
@@ -50,42 +48,30 @@ public class ShopHub : Hub<IShopHubClient>
         _logger.LogInformation("ShopHub joined. UserId={UserId}, CounterpartyId={CounterpartyId}, ConnectionId={ConnectionId}", userId, counterpartyId, connectionId);
 
         await Clients.Caller.ConnectionConfirmed("Успешно подключен к ShopHub");
+    }
 
-        var unreadCount = await _dbContext.ShopNotifications
-            .AsNoTracking()
-            .Where(n => n.CounterpartyId == counterpartyId)
-            .Where(n => n.DeletedAt == null)
-            .Where(n => n.UserAccountId == null || n.UserAccountId == userId)
-            .Where(n => !n.IsRead)
-            .CountAsync();
-
-        var unreadItems = await _dbContext.ShopNotifications
-            .AsNoTracking()
-            .Where(n => n.CounterpartyId == counterpartyId)
-            .Where(n => n.DeletedAt == null)
-            .Where(n => n.UserAccountId == null || n.UserAccountId == userId)
-            .Where(n => !n.IsRead)
-            .OrderBy(n => n.CreatedAt)
-            .Take(100)
-            .Select(n => new ShopNotificationDto
-            {
-                Id = n.Id,
-                Title = n.Title,
-                Description = n.Description,
-                ObjectType = n.ObjectType,
-                ObjectId = n.ObjectId,
-                IsRead = n.IsRead,
-                ReadAt = n.ReadAt,
-                CreatedAt = n.CreatedAt
-            })
-            .ToListAsync();
-
-        foreach (var n in unreadItems)
+    public async Task SyncEvents(long lastKnownSequenceNumber)
+    {
+        var userIdStr = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(userIdStr))
         {
-            await Clients.Caller.NotificationCreated(n);
+            await Clients.Caller.Disconnected("Ошибка авторизации");
+            await Task.Delay(200);
+            return;
         }
 
-        await Clients.Caller.UnreadNotificationsCountChanged(unreadCount);
+        var events = await _eventStore.GetEventsSinceAsync(lastKnownSequenceNumber, userIdStr);
+        foreach (var e in events)
+        {
+            await Clients.Caller.ReceiveEvent(e);
+        }
+
+        await Clients.Caller.SyncCompleted(events.Count);
+    }
+
+    public Task<long> GetLatestSequenceNumber()
+    {
+        return _eventStore.GetLatestSequenceNumberAsync();
     }
 
     public Task LeaveHub()

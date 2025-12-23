@@ -1,4 +1,5 @@
 using System.Threading.Tasks;
+using InternetShopService_back.Infrastructure.Events;
 using InternetShopService_back.Modules.OrderManagement.DTOs;
 using InternetShopService_back.Modules.Notifications.DTOs;
 using InternetShopService_back.Modules.UserCabinet.DTOs;
@@ -11,6 +12,9 @@ public interface IShopHubClient
 {
     Task ConnectionConfirmed(string message);
     Task Disconnected(string reason);
+
+    Task ReceiveEvent(UnifiedEvent @event);
+    Task SyncCompleted(int count);
 
     Task OrderCreated(OrderDto order);
     Task OrderUpdated(OrderDto order);

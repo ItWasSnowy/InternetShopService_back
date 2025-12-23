@@ -20,6 +20,7 @@ using InternetShopService_back.Infrastructure.Serialization;
 using InternetShopService_back.Middleware;
 using InternetShopService_back.Infrastructure.Sync;
 using InternetShopService_back.Infrastructure.SignalR;
+using InternetShopService_back.Infrastructure.Events;
 using OrderSyncService = InternetShopService_back.Infrastructure.Sync.OrderSyncService;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Services;
@@ -209,8 +210,13 @@ builder.Services.Configure<Microsoft.AspNetCore.SignalR.HubOptions<ShopHub>>(opt
 });
 
 builder.Services.AddSingleton<ShopConnectionManager>();
-builder.Services.AddSingleton<IShopNotificationService, ShopNotificationService>();
+builder.Services.AddScoped<IShopNotificationService, ShopNotificationService>();
 builder.Services.AddScoped<IShopNotificationsService, ShopNotificationsService>();
+
+// SignalR offline sync (EventStore)
+builder.Services.AddScoped<IEventStore, EventStore>();
+builder.Services.AddScoped<EventNotificationService>();
+builder.Services.AddHostedService<EventCleanupService>();
 
 builder.Services.AddAuthorization();
 

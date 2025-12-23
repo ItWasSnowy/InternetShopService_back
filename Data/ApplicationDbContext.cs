@@ -3,6 +3,7 @@ using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Modules.OrderManagement.Models;
 using InternetShopService_back.Modules.Notifications.Models;
+using InternetShopService_back.Infrastructure.Events.Models;
 
 namespace InternetShopService_back.Data;
 
@@ -38,6 +39,9 @@ public class ApplicationDbContext : DbContext
 
     // Notifications
     public DbSet<ShopNotification> ShopNotifications { get; set; }
+
+    // Events
+    public DbSet<OrderEvent> OrderEvents { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
