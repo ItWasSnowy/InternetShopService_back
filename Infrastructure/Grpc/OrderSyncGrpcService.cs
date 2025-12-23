@@ -1011,11 +1011,32 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
                 
                 if (order == null)
                 {
+                    if (!string.IsNullOrWhiteSpace(request.Order.OrderNumber))
+                    {
+                        var orderByNumber = await _orderRepository.GetByOrderNumberAsync(request.Order.OrderNumber);
+                        if (orderByNumber != null)
+                        {
+                            order = orderByNumber;
+                            orderId = order.Id;
+                            _logger.LogInformation(
+                                "Заказ по FimBizOrderId {FimBizOrderId} не найден, но найден заказ по OrderNumber {OrderNumber}. Используем существующий LocalOrderId: {OrderId} для обновления.",
+                                request.Order.OrderId, request.Order.OrderNumber, orderId);
+                            isNewOrder = false;
+                        }
+                    }
+
+                    if (order != null)
+                    {
+                        // no-op; orderId already set
+                    }
+                    else
+                    {
                     // Заказ не найден - это первое уведомление, создаем новый
                     orderId = Guid.NewGuid();
                     isNewOrder = true;
                     _logger.LogInformation("Обнаружен новый заказ, созданный в FimBiz. ExternalOrderId: {ExternalOrderId}, FimBizOrderId: {FimBizOrderId}, Создан новый локальный OrderId: {OrderId}",
                         request.Order.ExternalOrderId, request.Order.OrderId, orderId);
+                    }
                 }
                 else
                 {
