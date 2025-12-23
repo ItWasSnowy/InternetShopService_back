@@ -31,7 +31,9 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.HasIndex(x => x.UserAccountId);
         builder.HasIndex(x => x.Status);
         builder.HasIndex(x => x.CreatedAt);
-        builder.HasIndex(x => x.FimBizOrderId);
+        builder.HasIndex(x => x.FimBizOrderId)
+            .IsUnique()
+            .HasFilter("\"FimBizOrderId\" IS NOT NULL");
 
         builder.HasOne(x => x.UserAccount)
             .WithMany()
