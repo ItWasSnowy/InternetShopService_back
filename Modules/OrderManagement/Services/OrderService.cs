@@ -748,38 +748,12 @@ public class OrderService : IOrderService
 
     private async Task<bool> SendOrderStatusUpdateToFimBizAsync(LocalOrder order, OrderStatus newStatus)
     {
-        // Определяем правильный ExternalOrderId в зависимости от того, где был создан заказ
-        // Объявляем вне try блока, чтобы использовать в catch
-        string externalOrderId;
-        
-        // Логика определения ExternalOrderId:
-        // - Если заказ создан в FimBiz → ExternalOrderId = "FIMBIZ-{FimBizOrderId}"
-        // - Если заказ создан у нас → ExternalOrderId = наш Guid (строка)
-        //
-        // ВАЖНО: Когда заказ создается у нас и отправляется в FimBiz через SendOrderToFimBizAsync,
-        // используется ExternalOrderId = order.Id.ToString() (Guid в виде строки).
-        // После синхронизации у заказа будет FimBizOrderId, но при обновлении статуса нужно использовать
-        // тот же ExternalOrderId, что и при создании (Guid).
-        //
-        // Проблема: как различить заказ, созданный в FimBiz, от заказа, созданного у нас и синхронизированного?
-        // Оба будут иметь FimBizOrderId.
-        //
-        // ВРЕМЕННОЕ РЕШЕНИЕ: Используем простую логику на основе наличия FimBizOrderId.
-        // Если FimBizOrderId есть, считаем заказ созданным в FimBiz.
-        // Это может быть неверно для заказов, созданных у нас и синхронизированных.
-        // 
-        // TODO: Добавить поле IsCreatedInFimBiz в модель Order для точного определения источника заказа.
-        
-        if (order.FimBizOrderId.HasValue)
-        {
-            // Заказ создан в FimBiz - используем "FIMBIZ-{FimBizOrderId}"
-            externalOrderId = $"FIMBIZ-{order.FimBizOrderId.Value}";
-        }
-        else
-        {
-            // Заказ создан у нас - ExternalOrderId это наш Guid (строка)
-            externalOrderId = order.Id.ToString();
-        }
+        // ВАЖНО: в CreateOrderAsync мы всегда создаём заказ в FimBiz с ExternalOrderId = order.Id.ToString() (наш Guid).
+        // Если при последующих вызовах UpdateOrderStatusAsync отправлять другой ExternalOrderId (например, FIMBIZ-{FimBizOrderId}),
+        // FimBiz может трактовать это как ДРУГОЙ заказ и начать слать события для второго заказа, что приводит к дублям в нашем UI.
+        // Поэтому для обновлений статуса используем исходный ExternalOrderId (наш Guid) независимо от наличия FimBizOrderId.
+        // Объявляем вне try блока, чтобы использовать в catch.
+        var externalOrderId = order.Id.ToString();
         
         try
         {
@@ -801,32 +775,22 @@ public class OrderService : IOrderService
             // Преобразуем статус из нашей модели в gRPC
             var grpcStatus = MapToGrpcOrderStatus(newStatus);
             
-            // Проверяем формат ExternalOrderId для определения источника заказа
-            bool isCreatedInFimBiz = externalOrderId.StartsWith("FIMBIZ-", StringComparison.OrdinalIgnoreCase);
-            
-            // Если заказ создан у нас и нет FimBizOrderId, значит заказ еще не был отправлен в FimBiz
-            // В этом случае не нужно пытаться обновлять статус в FimBiz
-            if (!isCreatedInFimBiz && !order.FimBizOrderId.HasValue)
+            // Если у заказа нет FimBizOrderId, значит заказ еще не был создан/принят в FimBiz.
+            // В этом случае не нужно пытаться обновлять статус в FimBiz.
+            if (!order.FimBizOrderId.HasValue)
             {
                 _logger.LogInformation("=== [STATUS SYNC] Заказ {OrderId} создан у нас, но еще не был отправлен в FimBiz (нет FimBizOrderId). Пропускаем синхронизацию статуса ===", order.Id);
                 return false;
             }
-            
-            if (isCreatedInFimBiz)
-            {
-                _logger.LogInformation("=== [STATUS SYNC] Заказ синхронизирован с FimBiz, используем ExternalOrderId: {ExternalOrderId} ===", externalOrderId);
-            }
-            else
-            {
-                _logger.LogInformation("=== [STATUS SYNC] Заказ создан у нас, используем ExternalOrderId (Guid): {ExternalOrderId} ===", externalOrderId);
-            }
+
+            _logger.LogInformation("=== [STATUS SYNC] Используем ExternalOrderId (Guid): {ExternalOrderId} ===", externalOrderId);
 
             // Специальное логирование для статуса Cancelled
             if (newStatus == OrderStatus.Cancelled)
             {
                 _logger.LogInformation("=== [CANCELLED STATUS SYNC] Отправка статуса Cancelled для заказа {OrderId} в FimBiz ===", order.Id);
-                _logger.LogInformation("OrderId: {OrderId}, OrderNumber: {OrderNumber}, FimBizOrderId: {FimBizOrderId}, ExternalOrderId: {ExternalOrderId}, IsCreatedInFimBiz: {IsCreatedInFimBiz}, CurrentStatus: {CurrentStatus}, NewStatus: {NewStatus}", 
-                    order.Id, order.OrderNumber ?? "не указан", order.FimBizOrderId?.ToString() ?? "не указан", externalOrderId, isCreatedInFimBiz, order.Status, newStatus);
+                _logger.LogInformation("OrderId: {OrderId}, OrderNumber: {OrderNumber}, FimBizOrderId: {FimBizOrderId}, ExternalOrderId: {ExternalOrderId}, CurrentStatus: {CurrentStatus}, NewStatus: {NewStatus}", 
+                    order.Id, order.OrderNumber ?? "не указан", order.FimBizOrderId?.ToString() ?? "не указан", externalOrderId, order.Status, newStatus);
             }
 
             var updateRequest = new UpdateOrderStatusRequest
@@ -836,8 +800,8 @@ public class OrderService : IOrderService
                 NewStatus = grpcStatus
             };
 
-            _logger.LogInformation("Отправка обновления статуса заказа {OrderId} в FimBiz. Локальный статус: {LocalStatus}, gRPC статус: {GrpcStatus}, ExternalOrderId: {ExternalOrderId}, CompanyId: {CompanyId}, FimBizOrderId: {FimBizOrderId}, IsCreatedInFimBiz: {IsCreatedInFimBiz}", 
-                order.Id, newStatus, grpcStatus, updateRequest.ExternalOrderId, updateRequest.CompanyId, order.FimBizOrderId?.ToString() ?? "не указан", isCreatedInFimBiz);
+            _logger.LogInformation("Отправка обновления статуса заказа {OrderId} в FimBiz. Локальный статус: {LocalStatus}, gRPC статус: {GrpcStatus}, ExternalOrderId: {ExternalOrderId}, CompanyId: {CompanyId}, FimBizOrderId: {FimBizOrderId}", 
+                order.Id, newStatus, grpcStatus, updateRequest.ExternalOrderId, updateRequest.CompanyId, order.FimBizOrderId?.ToString() ?? "не указан");
 
             var response = await _fimBizGrpcClient.UpdateOrderStatusAsync(updateRequest);
 
