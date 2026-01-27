@@ -22,6 +22,12 @@ public class ShopConfiguration : IEntityTypeConfiguration<Shop>
         builder.Property(x => x.FimBizCompanyId)
             .IsRequired();
 
+        builder.Property(x => x.FimBizGrpcEndpoint)
+            .HasMaxLength(500);
+
+        builder.Property(x => x.FimBizApiKey)
+            .HasMaxLength(256);
+
         builder.Property(x => x.IsActive)
             .IsRequired()
             .HasDefaultValue(true);

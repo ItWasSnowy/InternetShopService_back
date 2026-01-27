@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using Grpc.Net.Client;
 using Grpc.Core;
 using InternetShopService_back.Infrastructure.Grpc.Contractors;
 using InternetShopService_back.Infrastructure.Grpc.Orders;
 using InternetShopService_back.Shared.Models;
+using InternetShopService_back.Shared.Repositories;
+using InternetShopService_back.Shared.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -11,44 +14,102 @@ namespace InternetShopService_back.Infrastructure.Grpc;
 
 public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
 {
-    private readonly GrpcChannel _channel;
-    private readonly ContractorSyncService.ContractorSyncServiceClient _contractorClient;
-    private readonly OrderSyncService.OrderSyncServiceClient _orderClient;
-    private readonly OrderCommentSyncService.OrderCommentSyncServiceClient _orderCommentClient;
     private readonly IConfiguration _configuration;
     private readonly ILogger<FimBizGrpcClient> _logger;
-    private readonly string _apiKey;
-    private readonly int _companyId;
-    private readonly int _organizationId;
+    private readonly IShopContext _shopContext;
+    private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly IShopRepository _shopRepository;
 
-    public FimBizGrpcClient(IConfiguration configuration, ILogger<FimBizGrpcClient> logger)
+    private static readonly ConcurrentDictionary<string, GrpcChannel> ChannelsByEndpoint = new();
+
+    public FimBizGrpcClient(
+        IConfiguration configuration,
+        ILogger<FimBizGrpcClient> logger,
+        IShopContext shopContext,
+        IHttpContextAccessor httpContextAccessor,
+        IShopRepository shopRepository)
     {
         _configuration = configuration;
         _logger = logger;
+        _shopContext = shopContext;
+        _httpContextAccessor = httpContextAccessor;
+        _shopRepository = shopRepository;
+    }
 
-        var endpoint = _configuration["FimBiz:GrpcEndpoint"] 
-            ?? throw new InvalidOperationException("FimBiz:GrpcEndpoint не настроен");
-        _apiKey = _configuration["FimBiz:ApiKey"] 
-            ?? throw new InvalidOperationException("FimBiz:ApiKey не настроен");
-        _companyId = _configuration.GetValue<int>("FimBiz:CompanyId", 0);
-        _organizationId = _configuration.GetValue<int>("FimBiz:OrganizationId", 0);
+    private sealed record FimBizResolvedSettings(
+        string Endpoint,
+        string ApiKey,
+        int CompanyId,
+        int? OrganizationId);
 
-        // Создание gRPC канала
-        _channel = GrpcChannel.ForAddress(endpoint, new GrpcChannelOptions
+    private async Task<FimBizResolvedSettings> ResolveSettingsAsync()
+    {
+        var shopId = _shopContext.ShopId;
+
+        if (!shopId.HasValue)
         {
-            MaxReceiveMessageSize = 4 * 1024 * 1024, // 4 MB
-            MaxSendMessageSize = 4 * 1024 * 1024
-        });
+            var httpShopId = _httpContextAccessor.HttpContext?.Items["ShopId"];
+            if (httpShopId is Guid guid)
+            {
+                shopId = guid;
+            }
+            else if (httpShopId is string str && Guid.TryParse(str, out var parsed))
+            {
+                shopId = parsed;
+            }
+        }
 
-        _contractorClient = new ContractorSyncService.ContractorSyncServiceClient(_channel);
-        _orderClient = new OrderSyncService.OrderSyncServiceClient(_channel);
-        _orderCommentClient = new OrderCommentSyncService.OrderCommentSyncServiceClient(_channel);
+        if (shopId.HasValue)
+        {
+            var shop = await _shopRepository.GetByIdAsync(shopId.Value);
+            if (shop != null)
+            {
+                var endpoint = shop.FimBizGrpcEndpoint;
+                var apiKey = shop.FimBizApiKey;
+
+                if (!string.IsNullOrWhiteSpace(endpoint) && !string.IsNullOrWhiteSpace(apiKey))
+                {
+                    return new FimBizResolvedSettings(
+                        endpoint,
+                        apiKey,
+                        shop.FimBizCompanyId,
+                        shop.FimBizOrganizationId);
+                }
+            }
+        }
+
+        var fallbackEndpoint = _configuration["FimBiz:GrpcEndpoint"]
+            ?? throw new InvalidOperationException("FimBiz:GrpcEndpoint не настроен");
+        var fallbackApiKey = _configuration["FimBiz:ApiKey"]
+            ?? throw new InvalidOperationException("FimBiz:ApiKey не настроен");
+        var fallbackCompanyId = _configuration.GetValue<int>("FimBiz:CompanyId", 0);
+        var fallbackOrganizationId = _configuration.GetValue<int>("FimBiz:OrganizationId", 0);
+
+        return new FimBizResolvedSettings(
+            fallbackEndpoint,
+            fallbackApiKey,
+            fallbackCompanyId,
+            fallbackOrganizationId > 0 ? fallbackOrganizationId : null);
+    }
+
+    private static GrpcChannel GetOrCreateChannel(string endpoint)
+    {
+        return ChannelsByEndpoint.GetOrAdd(endpoint, ep =>
+            GrpcChannel.ForAddress(ep, new GrpcChannelOptions
+            {
+                MaxReceiveMessageSize = 4 * 1024 * 1024,
+                MaxSendMessageSize = 4 * 1024 * 1024
+            }));
     }
 
     public async Task<Counterparty?> GetCounterpartyAsync(string phoneNumber)
     {
         try
         {
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var contractorClient = new ContractorSyncService.ContractorSyncServiceClient(channel);
+
             // Получаем список контрагентов с фильтром по корпоративному телефону
             var request = new GetContractorsRequest
             {
@@ -57,18 +118,18 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
                 PageSize = 1000 // Получаем всех с корпоративным телефоном
             };
             
-            if (_companyId > 0)
+            if (settings.CompanyId > 0)
             {
-                request.CompanyId = _companyId;
+                request.CompanyId = settings.CompanyId;
             }
             
-            if (_organizationId > 0)
+            if (settings.OrganizationId.HasValue && settings.OrganizationId.Value > 0)
             {
-                request.OrganizationId = _organizationId;
+                request.OrganizationId = settings.OrganizationId.Value;
             }
 
-            var headers = CreateHeaders();
-            var response = await _contractorClient.GetContractorsAsync(request, headers);
+            var headers = CreateHeaders(settings.ApiKey);
+            var response = await contractorClient.GetContractorsAsync(request, headers);
 
             // Ищем контрагента по номеру телефона
             // Номер может быть в формате +7XXXXXXXXXX или 7XXXXXXXXXX
@@ -117,13 +178,17 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var contractorClient = new ContractorSyncService.ContractorSyncServiceClient(channel);
+
             var request = new GetContractorRequest
             {
                 ContractorId = fimBizContractorId
             };
 
-            var headers = CreateHeaders();
-            var contractor = await _contractorClient.GetContractorAsync(request, headers);
+            var headers = CreateHeaders(settings.ApiKey);
+            var contractor = await contractorClient.GetContractorAsync(request, headers);
 
             return MapToCounterparty(contractor);
         }
@@ -155,6 +220,10 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var contractorClient = new ContractorSyncService.ContractorSyncServiceClient(channel);
+
             var contractor = await GetCounterpartyByFimBizIdAsync(fimBizContractorId);
             if (contractor == null)
             {
@@ -167,8 +236,8 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
                 ContractorId = fimBizContractorId
             };
 
-            var headers = CreateHeaders();
-            var fullContractor = await _contractorClient.GetContractorAsync(request, headers);
+            var headers = CreateHeaders(settings.ApiKey);
+            var fullContractor = await contractorClient.GetContractorAsync(request, headers);
 
             // Преобразуем DiscountRules в Discount
             // Нужен counterpartyId из локальной БД, но пока используем временный GUID
@@ -207,8 +276,12 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
-            var headers = CreateHeaders();
-            return await _contractorClient.GetContractorsAsync(request, headers);
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var contractorClient = new ContractorSyncService.ContractorSyncServiceClient(channel);
+
+            var headers = CreateHeaders(settings.ApiKey);
+            return await contractorClient.GetContractorsAsync(request, headers);
         }
         catch (RpcException ex)
         {
@@ -225,13 +298,17 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var contractorClient = new ContractorSyncService.ContractorSyncServiceClient(channel);
+
             var request = new GetContractorRequest
             {
                 ContractorId = fimBizContractorId
             };
 
-            var headers = CreateHeaders();
-            var contractor = await _contractorClient.GetContractorAsync(request, headers);
+            var headers = CreateHeaders(settings.ApiKey);
+            var contractor = await contractorClient.GetContractorAsync(request, headers);
             
             // Логируем количество DiscountRules согласно прото файлу FimBiz (поле 28)
             _logger.LogInformation("Получен контрагент {ContractorId} из FimBiz через GetContractor. DiscountRules.Count = {Count}", 
@@ -265,8 +342,12 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
 
     public AsyncServerStreamingCall<ContractorChange> SubscribeToChanges(SubscribeRequest request)
     {
-        var headers = CreateHeaders();
-        return _contractorClient.SubscribeToChanges(request, headers);
+        var settings = ResolveSettingsAsync().GetAwaiter().GetResult();
+        var channel = GetOrCreateChannel(settings.Endpoint);
+        var contractorClient = new ContractorSyncService.ContractorSyncServiceClient(channel);
+
+        var headers = CreateHeaders(settings.ApiKey);
+        return contractorClient.SubscribeToChanges(request, headers);
     }
 
     public async Task<GetActiveSessionsResponse> GetActiveSessionsAsync(GetActiveSessionsRequest request)
@@ -285,8 +366,12 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
-            var headers = CreateHeaders();
-            var response = await _orderClient.CreateOrderAsync(request, headers);
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var orderClient = new OrderSyncService.OrderSyncServiceClient(channel);
+
+            var headers = CreateHeaders(settings.ApiKey);
+            var response = await orderClient.CreateOrderAsync(request, headers);
             
             if (!response.Success)
             {
@@ -312,8 +397,12 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
-            var headers = CreateHeaders();
-            return await _orderClient.UpdateOrderStatusAsync(request, headers);
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var orderClient = new OrderSyncService.OrderSyncServiceClient(channel);
+
+            var headers = CreateHeaders(settings.ApiKey);
+            return await orderClient.UpdateOrderStatusAsync(request, headers);
         }
         catch (RpcException ex)
         {
@@ -363,8 +452,12 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
-            var headers = CreateHeaders();
-            return await _orderClient.GetOrderAsync(request, headers);
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var orderClient = new OrderSyncService.OrderSyncServiceClient(channel);
+
+            var headers = CreateHeaders(settings.ApiKey);
+            return await orderClient.GetOrderAsync(request, headers);
         }
         catch (RpcException ex)
         {
@@ -385,8 +478,12 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
-            var headers = CreateHeaders();
-            var response = await _orderCommentClient.CreateCommentAsync(request, headers);
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var orderCommentClient = new OrderCommentSyncService.OrderCommentSyncServiceClient(channel);
+
+            var headers = CreateHeaders(settings.ApiKey);
+            var response = await orderCommentClient.CreateCommentAsync(request, headers);
             
             if (!response.Success)
             {
@@ -412,8 +509,12 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
     {
         try
         {
-            var headers = CreateHeaders();
-            return await _orderCommentClient.GetOrderCommentsAsync(request, headers);
+            var settings = await ResolveSettingsAsync();
+            var channel = GetOrCreateChannel(settings.Endpoint);
+            var orderCommentClient = new OrderCommentSyncService.OrderCommentSyncServiceClient(channel);
+
+            var headers = CreateHeaders(settings.ApiKey);
+            return await orderCommentClient.GetOrderCommentsAsync(request, headers);
         }
         catch (RpcException ex)
         {
@@ -517,11 +618,11 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
         return discounts;
     }
 
-    private Metadata CreateHeaders()
+    private static Metadata CreateHeaders(string apiKey)
     {
         return new Metadata
         {
-            { "x-api-key", _apiKey }
+            { "x-api-key", apiKey }
         };
     }
 
@@ -572,6 +673,5 @@ public class FimBizGrpcClient : IFimBizGrpcClient, IDisposable
 
     public void Dispose()
     {
-        _channel?.Dispose();
     }
 }

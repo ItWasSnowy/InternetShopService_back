@@ -26,6 +26,10 @@ public class Shop
     /// ID организации в FimBiz (опционально)
     /// </summary>
     public int? FimBizOrganizationId { get; set; }
+
+    public string? FimBizGrpcEndpoint { get; set; }
+
+    public string? FimBizApiKey { get; set; }
     
     /// <summary>
     /// Активен ли магазин

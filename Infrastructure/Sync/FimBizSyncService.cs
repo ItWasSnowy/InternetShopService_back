@@ -9,6 +9,7 @@ using InternetShopService_back.Modules.OrderManagement.Repositories;
 using InternetShopService_back.Modules.UserCabinet.Models;
 using InternetShopService_back.Shared.Models;
 using InternetShopService_back.Shared.Repositories;
+using InternetShopService_back.Shared.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -69,6 +70,7 @@ public class FimBizSyncService : BackgroundService
     {
         using var scope = _serviceProvider.CreateScope();
         var grpcClient = scope.ServiceProvider.GetRequiredService<IFimBizGrpcClient>();
+        var shopContext = scope.ServiceProvider.GetRequiredService<IShopContext>();
         var counterpartyRepository = scope.ServiceProvider.GetRequiredService<ICounterpartyRepository>();
         var shopRepository = scope.ServiceProvider.GetRequiredService<IShopRepository>();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -93,6 +95,8 @@ public class FimBizSyncService : BackgroundService
             {
                 if (cancellationToken.IsCancellationRequested)
                     break;
+
+                shopContext.SetShopId(shop.Id);
 
                 _logger.LogInformation("Синхронизация контрагентов для магазина {ShopName} (CompanyId: {CompanyId})", 
                     shop.Name, shop.FimBizCompanyId);
@@ -213,8 +217,11 @@ public class FimBizSyncService : BackgroundService
             {
                 using var scope = _serviceProvider.CreateScope();
                 var grpcClient = scope.ServiceProvider.GetRequiredService<IFimBizGrpcClient>();
+                var shopContext = scope.ServiceProvider.GetRequiredService<IShopContext>();
                 var counterpartyRepository = scope.ServiceProvider.GetRequiredService<ICounterpartyRepository>();
                 var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+
+                shopContext.SetShopId(shop.Id);
 
                 // Получаем последнюю версию синхронизации для этого магазина
                 var lastSyncVersion = await GetLastSyncVersionAsync(dbContext, shop.FimBizCompanyId, shop.FimBizOrganizationId);

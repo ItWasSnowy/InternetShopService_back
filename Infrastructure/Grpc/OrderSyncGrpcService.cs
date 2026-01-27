@@ -111,25 +111,6 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
         try
         {
-            // Проверка API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            _logger.LogInformation("API ключ из запроса: {ApiKey} (первые 10 символов)", 
-                string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...");
-            _logger.LogInformation("Ожидаемый API ключ: {ExpectedApiKey} (первые 10 символов)", 
-                expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при обновлении статуса заказа {ExternalOrderId}. " +
-                    "Получен: {ReceivedKey}, Ожидается: {ExpectedKey}", 
-                    request?.ExternalOrderId, 
-                    string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...",
-                    expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             _logger.LogInformation("Получено уведомление об изменении статуса заказа {ExternalOrderId} на {NewStatus} от FimBiz", 
                 request.ExternalOrderId, request.NewStatus);
 
@@ -964,25 +945,6 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
         try
         {
-            // Проверка API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            _logger.LogInformation("API ключ из запроса: {ApiKey} (первые 10 символов)", 
-                string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...");
-            _logger.LogInformation("Ожидаемый API ключ: {ExpectedApiKey} (первые 10 символов)", 
-                expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при обновлении заказа {ExternalOrderId}. " +
-                    "Получен: {ReceivedKey}, Ожидается: {ExpectedKey}", 
-                    request?.Order?.ExternalOrderId,
-                    string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...",
-                    expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             if (request.Order == null)
             {
                 _logger.LogWarning("Получен запрос NotifyOrderUpdate без Order");
@@ -1874,25 +1836,6 @@ public class OrderSyncGrpcService : OrderSyncServerService.OrderSyncServerServic
 
         try
         {
-            // Проверка API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            _logger.LogInformation("API ключ из запроса: {ApiKey} (первые 10 символов)", 
-                string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...");
-            _logger.LogInformation("Ожидаемый API ключ: {ExpectedApiKey} (первые 10 символов)", 
-                expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при удалении заказа {ExternalOrderId}. " +
-                    "Получен: {ReceivedKey}, Ожидается: {ExpectedKey}", 
-                    request?.ExternalOrderId,
-                    string.IsNullOrEmpty(apiKey) ? "ОТСУТСТВУЕТ" : apiKey.Substring(0, Math.Min(10, apiKey.Length)) + "...",
-                    expectedApiKey?.Substring(0, Math.Min(10, expectedApiKey.Length)) + "...");
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             _logger.LogInformation("Получено уведомление об удалении заказа {ExternalOrderId} от FimBiz", 
                 request.ExternalOrderId);
 

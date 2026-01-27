@@ -5,7 +5,6 @@ using InternetShopService_back.Modules.UserCabinet.DTOs;
 using InternetShopService_back.Modules.UserCabinet.Services;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Shared.Repositories;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace InternetShopService_back.Infrastructure.Grpc;
@@ -21,7 +20,6 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
     private readonly IDeliveryAddressRepository _deliveryAddressRepository;
     private readonly IShopNotificationService _shopNotificationService;
     private readonly ILogger<ContractorSyncGrpcService> _logger;
-    private readonly IConfiguration _configuration;
 
     public ContractorSyncGrpcService(
         FimBizSessionService fimBizSessionService,
@@ -29,8 +27,7 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
         ICounterpartyRepository counterpartyRepository,
         IDeliveryAddressRepository deliveryAddressRepository,
         IShopNotificationService shopNotificationService,
-        ILogger<ContractorSyncGrpcService> logger,
-        IConfiguration configuration)
+        ILogger<ContractorSyncGrpcService> logger)
     {
         _fimBizSessionService = fimBizSessionService;
         _sessionControlService = sessionControlService;
@@ -38,7 +35,6 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
         _deliveryAddressRepository = deliveryAddressRepository;
         _shopNotificationService = shopNotificationService;
         _logger = logger;
-        _configuration = configuration;
     }
 
     /// <summary>
@@ -56,17 +52,6 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
 
         try
         {
-            // Проверка API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при запросе сессий для контрагента {ContractorId}", 
-                    request.ContractorId);
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             _logger.LogInformation("Запрос сессий для контрагента {ContractorId} от FimBiz", request.ContractorId);
 
             var response = await _fimBizSessionService.GetActiveSessionsByContractorIdAsync(request.ContractorId);
@@ -103,17 +88,6 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
 
         try
         {
-            // Проверка API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при выполнении команды управления сессиями для контрагента {ContractorId}", 
-                    request.SessionControl?.ContractorId ?? 0);
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             if (request.SessionControl == null)
             {
                 _logger.LogWarning("Получен запрос ExecuteSessionControl без SessionControl");
@@ -163,17 +137,6 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
 
         try
         {
-            // 1. Валидация API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при запросе адресов для контрагента {ContractorId}", 
-                    request.ContractorId);
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             _logger.LogInformation("Запрос адресов доставки для контрагента {ContractorId} от FimBiz", request.ContractorId);
 
             // 2. Найти контрагента по FimBizContractorId
@@ -249,17 +212,6 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
 
         try
         {
-            // 1. Валидация API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при создании адреса для контрагента {ContractorId}", 
-                    request.ContractorId);
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             // 2. Валидация данных
             if (string.IsNullOrWhiteSpace(request.Address))
             {
@@ -369,15 +321,6 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
 
         try
         {
-            // 1. Валидация API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             // 2. Валидация данных
             if (string.IsNullOrWhiteSpace(request.Address))
             {
@@ -491,16 +434,16 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
 
         try
         {
-            // 1. Валидация API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
+            // 2. Валидация данных
+            if (string.IsNullOrWhiteSpace(request.AddressId))
             {
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
+                return new DeleteContractorDeliveryAddressResponse
+                {
+                    Success = false,
+                    Message = "Id адреса (поле address_id) не может быть пустым"
+                };
             }
 
-            // 2. Парсинг ID адреса
             if (!Guid.TryParse(request.AddressId, out var addressId))
             {
                 return new DeleteContractorDeliveryAddressResponse
@@ -581,15 +524,6 @@ public class ContractorSyncGrpcService : ContractorSyncService.ContractorSyncSer
 
         try
         {
-            // 1. Валидация API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             // 2. Найти контрагента
             var counterparty = await _counterpartyRepository.GetByFimBizIdAsync(request.ContractorId);
             

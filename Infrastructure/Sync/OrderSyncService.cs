@@ -6,6 +6,7 @@ using InternetShopService_back.Modules.OrderManagement.Repositories;
 using InternetShopService_back.Modules.OrderManagement.Services;
 using InternetShopService_back.Modules.UserCabinet.Repositories;
 using InternetShopService_back.Shared.Repositories;
+using InternetShopService_back.Shared.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -78,6 +79,7 @@ public class OrderSyncService : BackgroundService
         var userAccountRepository = scope.ServiceProvider.GetRequiredService<IUserAccountRepository>();
         var counterpartyRepository = scope.ServiceProvider.GetRequiredService<ICounterpartyRepository>();
         var shopRepository = scope.ServiceProvider.GetRequiredService<IShopRepository>();
+        var shopContext = scope.ServiceProvider.GetRequiredService<IShopContext>();
         var deliveryAddressRepository = scope.ServiceProvider.GetRequiredService<IDeliveryAddressRepository>();
         var fimBizGrpcClient = scope.ServiceProvider.GetRequiredService<IFimBizGrpcClient>();
         var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -114,6 +116,8 @@ public class OrderSyncService : BackgroundService
                         errorCount++;
                         continue;
                     }
+
+                    shopContext.SetShopId(userAccount.ShopId);
 
                     // Отправляем заказ в FimBiz
                     var sent = await SendOrderToFimBizAsync(

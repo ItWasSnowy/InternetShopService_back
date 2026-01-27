@@ -28,6 +28,8 @@ using InternetShopService_back.Modules.OrderManagement.Repositories;
 using InternetShopService_back.Modules.OrderManagement.Services;
 using InternetShopService_back.Modules.Notifications.Services;
 using InternetShopService_back.Shared.Repositories;
+using InternetShopService_back.Shared.Services;
+using InternetShopService_back.Infrastructure.Grpc.Interceptors;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -55,7 +57,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownProxies.Clear();
 });
 
-builder.Services.AddGrpc(); // Добавляем поддержку gRPC сервера
+builder.Services.AddGrpc(options =>
+{
+    options.Interceptors.Add<FimBizApiKeyInterceptor>();
+}); // Добавляем поддержку gRPC сервера
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -229,6 +234,7 @@ builder.Services.AddScoped<ISessionRepository, SessionRepository>();
 builder.Services.AddScoped<ICartRepository, CartRepository>();
 builder.Services.AddScoped<ICounterpartyRepository, CounterpartyRepository>();
 builder.Services.AddScoped<IShopRepository, ShopRepository>();
+builder.Services.AddScoped<IShopApiKeyRepository, ShopApiKeyRepository>();
 builder.Services.AddScoped<IDeliveryAddressRepository, DeliveryAddressRepository>();
 builder.Services.AddScoped<ICargoReceiverRepository, CargoReceiverRepository>();
     builder.Services.AddScoped<IOrderRepository, OrderRepository>();
@@ -236,9 +242,10 @@ builder.Services.AddScoped<ICargoReceiverRepository, CargoReceiverRepository>();
 
 // Infrastructure services
 builder.Services.AddHttpContextAccessor(); // Для доступа к HttpContext в сервисах
+builder.Services.AddScoped<IShopContext, ShopContext>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IEmailService, EmailService>();
-builder.Services.AddSingleton<IFimBizGrpcClient, FimBizGrpcClient>(); // Singleton для переиспользования канала
+builder.Services.AddScoped<IFimBizGrpcClient, FimBizGrpcClient>();
 
 // Call service (Zvonok API)
 var callProvider = builder.Configuration.GetValue<string>("CallsConfiguration:Provider")?.ToLower();

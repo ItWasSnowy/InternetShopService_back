@@ -9,7 +9,6 @@ using InternetShopService_back.Modules.OrderManagement.Repositories;
 using InternetShopService_back.Modules.Notifications.Models;
 using InternetShopService_back.Modules.Notifications.Services;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using GrpcOrderComment = InternetShopService_back.Infrastructure.Grpc.Orders.OrderComment;
 using GrpcAttachedFile = InternetShopService_back.Infrastructure.Grpc.Orders.AttachedFile;
@@ -29,7 +28,6 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
     private readonly IShopNotificationService _shopNotificationService;
     private readonly IShopNotificationsService _notificationsService;
     private readonly ILogger<OrderCommentSyncGrpcService> _logger;
-    private readonly IConfiguration _configuration;
     private readonly ApplicationDbContext _dbContext;
 
     public OrderCommentSyncGrpcService(
@@ -38,7 +36,6 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
         IShopNotificationService shopNotificationService,
         IShopNotificationsService notificationsService,
         ILogger<OrderCommentSyncGrpcService> logger,
-        IConfiguration configuration,
         ApplicationDbContext dbContext)
     {
         _orderRepository = orderRepository;
@@ -46,7 +43,6 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
         _shopNotificationService = shopNotificationService;
         _notificationsService = notificationsService;
         _logger = logger;
-        _configuration = configuration;
         _dbContext = dbContext;
     }
 
@@ -69,16 +65,6 @@ public class OrderCommentSyncGrpcService : OrderCommentSyncService.OrderCommentS
 
         try
         {
-            // Проверка API ключа
-            var apiKey = context.RequestHeaders.GetValue("x-api-key");
-            var expectedApiKey = _configuration["FimBiz:ApiKey"];
-            
-            if (string.IsNullOrEmpty(apiKey) || apiKey != expectedApiKey)
-            {
-                _logger.LogWarning("Неверный или отсутствующий API ключ при создании комментария");
-                throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid API key"));
-            }
-
             if (request.Comment == null)
             {
                 _logger.LogWarning("Получен запрос NotifyCommentCreated без Comment");
