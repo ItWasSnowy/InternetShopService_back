@@ -103,55 +103,92 @@ public class FimBizSyncService : BackgroundService
 
                 // Получаем контрагентов для этого магазина
                 // Синхронизируем только контрагентов с флагом создания кабинета
-                var request = new GetContractorsRequest
-                {
-                    CompanyId = shop.FimBizCompanyId,
-                    WithCorporatePhone = true,
-                    WithCreateCabinet = true,  // Только контрагенты с флагом создания кабинета
-                    BuyersOnly = true,
-                    PageSize = 1000
-                };
-                
-                if (shop.FimBizOrganizationId.HasValue)
-                {
-                    request.OrganizationId = shop.FimBizOrganizationId.Value;
-                }
+                var contractorSyncSettings = GetContractorSyncSettings();
 
-                var response = await grpcClient.GetContractorsAsync(request);
+                var page = 1;
+                var shopSyncedCount = 0;
+                var syncedFimBizContractorIds = new HashSet<int>();
                 
-                int shopSyncedCount = 0;
-                foreach (var contractorSummary in response.Contractors)
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    if (cancellationToken.IsCancellationRequested)
+                    var request = new GetContractorsRequest
+                    {
+                        CompanyId = shop.FimBizCompanyId,
+                        WithCorporatePhone = contractorSyncSettings.WithCorporatePhone,
+                        WithCreateCabinet = contractorSyncSettings.WithCreateCabinet,
+                        BuyersOnly = contractorSyncSettings.BuyersOnly,
+                        Page = page,
+                        PageSize = contractorSyncSettings.PageSize
+                    };
+
+                    if (shop.FimBizOrganizationId.HasValue)
+                    {
+                        request.OrganizationId = shop.FimBizOrganizationId.Value;
+                    }
+
+                    var response = await grpcClient.GetContractorsAsync(request);
+
+                    _logger.LogInformation(
+                        "GetContractors: Shop={ShopName}, CompanyId={CompanyId}, OrganizationId={OrganizationId}, Page={Page}, PageSize={PageSize}, TotalCount={TotalCount}, Returned={Returned}, HasMore={HasMore}, MaxSyncVersion={MaxSyncVersion}",
+                        shop.Name,
+                        shop.FimBizCompanyId,
+                        shop.FimBizOrganizationId?.ToString() ?? "нет",
+                        page,
+                        contractorSyncSettings.PageSize,
+                        response.TotalCount,
+                        response.Contractors.Count,
+                        response.HasMore,
+                        response.MaxSyncVersion);
+
+                    foreach (var contractorSummary in response.Contractors)
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                            break;
+
+                        syncedFimBizContractorIds.Add(contractorSummary.ContractorId);
+
+                        // Логируем количество DiscountRules в базовом ответе GetContractors
+                        // Согласно прото файлу FimBiz, GetContractors может не возвращать полные данные
+                        _logger.LogDebug("Базовые данные контрагента {ContractorId} из GetContractors: DiscountRules.Count = {Count}",
+                            contractorSummary.ContractorId, contractorSummary.DiscountRules?.Count ?? 0);
+
+                        // Получаем полные данные контрагента со скидками через GetContractor (rpc GetContractor)
+                        // Это гарантирует получение всех discount_rules согласно прото файлу FimBiz
+                        var fullContractor = await grpcClient.GetContractorGrpcAsync(contractorSummary.ContractorId);
+                        if (fullContractor != null)
+                        {
+                            _logger.LogInformation("Полные данные контрагента {ContractorId} из GetContractor: DiscountRules.Count = {Count}",
+                                fullContractor.ContractorId, fullContractor.DiscountRules?.Count ?? 0);
+
+                            // SyncContractorAsync принимает Contractor из gRPC (тип из прото файла)
+                            await SyncContractorAsync(fullContractor, counterpartyRepository, dbContext, cancellationToken);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Не удалось получить полные данные контрагента {ContractorId} через GetContractor, используем базовые данные из GetContractors",
+                                contractorSummary.ContractorId);
+                            await SyncContractorAsync(contractorSummary, counterpartyRepository, dbContext, cancellationToken);
+                        }
+                        shopSyncedCount++;
+                    }
+
+                    if (!response.HasMore)
                         break;
 
-                    // Логируем количество DiscountRules в базовом ответе GetContractors
-                    // Согласно прото файлу FimBiz, GetContractors может не возвращать полные данные
-                    _logger.LogDebug("Базовые данные контрагента {ContractorId} из GetContractors: DiscountRules.Count = {Count}", 
-                        contractorSummary.ContractorId, contractorSummary.DiscountRules?.Count ?? 0);
-
-                    // Получаем полные данные контрагента со скидками через GetContractor (rpc GetContractor)
-                    // Это гарантирует получение всех discount_rules согласно прото файлу FimBiz
-                    var fullContractor = await grpcClient.GetContractorGrpcAsync(contractorSummary.ContractorId);
-                    if (fullContractor != null)
-                    {
-                        _logger.LogInformation("Полные данные контрагента {ContractorId} из GetContractor: DiscountRules.Count = {Count}", 
-                            fullContractor.ContractorId, fullContractor.DiscountRules?.Count ?? 0);
-                        
-                        // SyncContractorAsync принимает Contractor из gRPC (тип из прото файла)
-                        await SyncContractorAsync(fullContractor, counterpartyRepository, dbContext, cancellationToken);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Не удалось получить полные данные контрагента {ContractorId} через GetContractor, используем базовые данные из GetContractors", 
-                            contractorSummary.ContractorId);
-                        await SyncContractorAsync(contractorSummary, counterpartyRepository, dbContext, cancellationToken);
-                    }
-                    shopSyncedCount++;
+                    page++;
                 }
 
+                // Блокируем доступ к кабинету для локальных контрагентов, которые больше не возвращаются из FimBiz
+                // (удалили в FimBiz или выключили доступ к кабинету/фильтрам)
+                await DisableMissingCounterpartiesCabinetAsync(
+                    shop.FimBizCompanyId,
+                    shop.FimBizOrganizationId,
+                    syncedFimBizContractorIds,
+                    dbContext,
+                    cancellationToken);
+
                 totalSyncedCount += shopSyncedCount;
-                _logger.LogInformation("Синхронизировано {Count} контрагентов для магазина {ShopName}", 
+                _logger.LogInformation("Синхронизировано {Count} контрагентов для магазина {ShopName}",
                     shopSyncedCount, shop.Name);
             }
 
@@ -349,8 +386,8 @@ public class FimBizSyncService : BackgroundService
                     break;
 
                 case ContractorChangeType.Deleted:
-                    await DeleteContractorAsync(contractor.ContractorId, counterpartyRepository, dbContext, cancellationToken);
-                    _logger.LogInformation("Контрагент {ContractorId} удален", contractor.ContractorId);
+                    await DisableCounterpartyCabinetAsync(contractor.ContractorId, counterpartyRepository, dbContext, cancellationToken);
+                    _logger.LogInformation("Контрагент {ContractorId} удален в FimBiz: доступ к кабинету отключен и сессии деактивированы", contractor.ContractorId);
                     break;
             }
         }
@@ -691,31 +728,93 @@ public class FimBizSyncService : BackgroundService
             counterparty.Id, addedCount, skippedCount);
     }
 
-    private async Task DeleteContractorAsync(
+    private sealed record ContractorSyncSettings(
+        bool WithCorporatePhone,
+        bool WithCreateCabinet,
+        bool BuyersOnly,
+        int PageSize);
+
+    private ContractorSyncSettings GetContractorSyncSettings()
+    {
+        var withCorporatePhone = _configuration.GetValue("FimBiz:ContractorsSync:WithCorporatePhone", true);
+        var withCreateCabinet = _configuration.GetValue("FimBiz:ContractorsSync:WithCreateCabinet", true);
+        var buyersOnly = _configuration.GetValue("FimBiz:ContractorsSync:BuyersOnly", true);
+        var pageSize = _configuration.GetValue("FimBiz:ContractorsSync:PageSize", 1000);
+
+        if (pageSize <= 0)
+            pageSize = 1000;
+
+        return new ContractorSyncSettings(withCorporatePhone, withCreateCabinet, buyersOnly, pageSize);
+    }
+
+    private async Task DisableMissingCounterpartiesCabinetAsync(
+        int? fimBizCompanyId,
+        int? fimBizOrganizationId,
+        HashSet<int> syncedFimBizContractorIds,
+        ApplicationDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (!fimBizCompanyId.HasValue || fimBizCompanyId.Value <= 0)
+            return;
+
+        var query = dbContext.Counterparties.AsQueryable();
+        query = query.Where(c => c.FimBizCompanyId == fimBizCompanyId);
+
+        if (fimBizOrganizationId.HasValue && fimBizOrganizationId.Value > 0)
+        {
+            query = query.Where(c => c.FimBizOrganizationId == fimBizOrganizationId);
+        }
+
+        // Берем только тех, кто привязан к FimBiz и у кого сейчас кабинет включен
+        var candidates = await query
+            .Where(c => c.FimBizContractorId.HasValue && c.IsCreateCabinet)
+            .ToListAsync(cancellationToken);
+
+        foreach (var counterparty in candidates)
+        {
+            var fimBizId = counterparty.FimBizContractorId!.Value;
+            if (syncedFimBizContractorIds.Contains(fimBizId))
+                continue;
+
+            counterparty.IsCreateCabinet = false;
+            counterparty.UpdatedAt = DateTime.UtcNow;
+
+            await DeactivateUserSessionsAsync(counterparty.Id, dbContext, cancellationToken);
+
+            _logger.LogWarning(
+                "Контрагент {FimBizContractorId} больше не возвращается из FimBiz (CompanyId={CompanyId}, OrganizationId={OrganizationId}). Кабинет отключен, сессии деактивированы.",
+                fimBizId,
+                fimBizCompanyId.Value,
+                fimBizOrganizationId?.ToString() ?? "нет");
+        }
+
+        if (candidates.Count > 0)
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private async Task DisableCounterpartyCabinetAsync(
         int fimBizContractorId,
         ICounterpartyRepository counterpartyRepository,
         ApplicationDbContext dbContext,
         CancellationToken cancellationToken)
     {
         var counterparty = await counterpartyRepository.GetByFimBizIdAsync(fimBizContractorId);
-        if (counterparty != null)
+        if (counterparty == null)
         {
-            // Удаляем связанные скидки
-            var discounts = await dbContext.Discounts
-                .Where(d => d.CounterpartyId == counterparty.Id)
-                .ToListAsync();
-            
-            if (discounts.Any())
-            {
-                dbContext.Discounts.RemoveRange(discounts);
-            }
-
-            // Удаляем контрагента
-            dbContext.Counterparties.Remove(counterparty);
-            await dbContext.SaveChangesAsync(cancellationToken);
-            
-            _logger.LogWarning("Контрагент {ContractorId} удален из локальной БД", fimBizContractorId);
+            _logger.LogWarning("Контрагент {ContractorId} не найден в локальной БД для отключения кабинета", fimBizContractorId);
+            return;
         }
+
+        if (counterparty.IsCreateCabinet)
+        {
+            counterparty.IsCreateCabinet = false;
+            counterparty.UpdatedAt = DateTime.UtcNow;
+            await counterpartyRepository.UpdateAsync(counterparty);
+        }
+
+        await DeactivateUserSessionsAsync(counterparty.Id, dbContext, cancellationToken);
     }
 
     private CounterpartyType MapContractorType(string? type)
