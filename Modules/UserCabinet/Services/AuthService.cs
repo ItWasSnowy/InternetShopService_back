@@ -80,7 +80,7 @@ public class AuthService : IAuthService
                 var fimBizCounterparty = await _fimBizGrpcClient.GetCounterpartyAsync(phoneNumber);
                 if (fimBizCounterparty == null)
                 {
-                    throw new InvalidOperationException("Контрагент с таким номером телефона не найден в FimBiz");
+                    throw new InvalidOperationException("Пользователь не найден");
                 }
 
                 // Проверяем флаг создания кабинета
