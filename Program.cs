@@ -287,6 +287,7 @@ builder.Services.AddCors(options =>
             .Get<string[]>()
             ?? new[]
             {
+                "https://hydrolan.ru",
                 "https://hydrolan.fimbiz.ru",
                 "https://test.fimbiz.ru",
                 "https://tdapi.fimbiz.ru",
