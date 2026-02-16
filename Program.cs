@@ -387,6 +387,8 @@ app.UseForwardedHeaders();
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 
+app.UseShopResolution();
+
 // Статические файлы ДО аутентификации - чтобы они были доступны без токена
 app.UseStaticFiles(new StaticFileOptions
 {
